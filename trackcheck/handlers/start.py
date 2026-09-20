@@ -8,9 +8,10 @@ from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMa
 
 from trackcheck.database.connection import db
 from trackcheck.database.repositories import (
-    save_user_settings, update_streak, get_user_timezone, set_user_timezone,
+    save_user_settings, update_streak,
 )
 from trackcheck.states.workout import WorkoutSessionState
+from trackcheck.utils.dates import get_user_timezone, set_user_timezone
 from trackcheck.utils.bot_helpers import delete_message_safe, delete_message_after_delay
 from trackcheck.keyboards.common import timezone_picker_keyboard, with_back_kb
 from trackcheck.config import RUSSIAN_TIMEZONES
