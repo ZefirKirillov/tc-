@@ -1,10 +1,18 @@
+import base64
 import json
 import os
 import re
+import urllib.request
 from typing import Optional
 
-from google import genai
-from google.genai import types
+try:
+    from google import genai
+    from google.genai import types
+    _GOOGLE_AVAILABLE = True
+except ImportError:
+    genai = None
+    types = None
+    _GOOGLE_AVAILABLE = False
 
 from trackcheck.database.repositories import (
     get_ratings, get_daily_ratings, get_today_ratings, get_yesterday_ratings,
@@ -15,100 +23,164 @@ from trackcheck.database.repositories import (
 from trackcheck.utils.formatting import strip_markdown
 
 
-def gemini_generate(prompt: str, max_tokens: int = 8192, raw: bool = False) -> str:
-    """Синхронный вызов Gemini. raw=True — не применять strip_markdown (для JSON-ответов)."""
-    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        return "❌ ИИ недоступен (нет API-ключа). Установи GOOGLE_API_KEY или GEMINI_API_KEY."
-    try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model='gemini-3.6-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(max_output_tokens=max_tokens)
+NARA_BASE_URL = os.environ.get("NARA_BASE_URL", "https://router.bynara.id/v1").rstrip("/")
+NARA_MODEL = os.environ.get("NARA_MODEL", "ling-3.0-flash-vl-free")
+GOOGLE_MODEL = os.environ.get("GOOGLE_MODEL", "gemini-3.6-flash")
+
+
+def _nara_api_key(ratings: bool = False) -> Optional[str]:
+    if ratings:
+        return (
+            os.environ.get("NARA_API_KEY_RATINGS")
+            or os.environ.get("NARA_API_RATINGS")
+            or os.environ.get("NARA_API")
         )
-        text = getattr(response, 'text', None)
-        if text:
-            text = text.strip()
-            if raw:
-                print(f"[GEMINI] Raw response ({len(text)} chars): {repr(text[:200])}")
+    return os.environ.get("NARA_API") or os.environ.get("NARA_API_KEY")
+
+
+def _google_api_key(ratings: bool = False) -> Optional[str]:
+    if ratings:
+        return os.environ.get("GOOGLE_API_KEY_RATINGS") or os.environ.get("GEMINI_API_KEY_RATINGS")
+    return os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+
+
+def _nara_chat(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None,
+               api_key: Optional[str] = None) -> Optional[str]:
+    """Прямой вызов NaraRouter через OpenAI-совместимый /chat/completions."""
+    key = api_key if api_key is not None else _nara_api_key()
+    if not key:
+        return None
+    if isinstance(image_bytes, bytes) and len(image_bytes) == 0:
+        image_bytes = None
+    try:
+        if image_bytes:
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            content = [
+                {"type": "text", "text": prompt},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/png;base64,{b64}"}},
+            ]
+        else:
+            content = prompt
+        payload = {
+            "model": NARA_MODEL,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": max_tokens,
+        }
+        req = urllib.request.Request(
+            f"{NARA_BASE_URL}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {key}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        choices = body.get("choices") or []
+        if choices:
+            msg = choices[0].get("message") or {}
+            text = (msg.get("content") or "").strip()
+            if text:
                 return text
-            return strip_markdown(text)
-        if response.candidates and response.candidates[0].content.parts:
-            t = response.candidates[0].content.parts[0].text.strip()
-            if raw:
-                print(f"[GEMINI] Raw response from candidates ({len(t)} chars): {repr(t[:200])}")
-                return t
-            return strip_markdown(t)
-        return "❌ ИИ не вернул ответ (возможно, сработала фильтрация)."
+        print(f"[NARA] Пустой ответ от роутера: {repr(str(body)[:200])}")
+        return None
     except Exception as e:
         import traceback
-        print(f"[GEMINI] Ошибка: {e}")
+        print(f"[NARA] Ошибка: {e}")
         traceback.print_exc()
-        return "❌ Ошибка при обращении к ИИ. Проверь GOOGLE_API_KEY и логи сервера."
+        return None
+
+
+def _google_generate(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None,
+                     think_off: bool = False, api_key: Optional[str] = None) -> Optional[str]:
+    """Fallback на прямой Google API. Возвращает None при ошибке/отсутствии ключа."""
+    if not _GOOGLE_AVAILABLE:
+        return None
+    key = api_key if api_key is not None else _google_api_key()
+    if not key:
+        return None
+    try:
+        client = genai.Client(api_key=key)
+        kwargs = {"max_output_tokens": max_tokens}
+        if think_off:
+            kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+        config = types.GenerateContentConfig(**kwargs)
+        if image_bytes:
+            image_part = types.Part.from_bytes(data=image_bytes, mime_type='image/png')
+            contents = [image_part, prompt]
+        else:
+            contents = prompt
+        response = client.models.generate_content(
+            model=GOOGLE_MODEL,
+            contents=contents,
+            config=config,
+        )
+        text = (getattr(response, 'text', None) or "").strip()
+        if not text and response.candidates and response.candidates[0].content.parts:
+            text = response.candidates[0].content.parts[0].text.strip()
+        return text or None
+    except Exception as e:
+        import traceback
+        print(f"[GEMINI] Ошибка (fallback): {e}")
+        traceback.print_exc()
+        return None
+
+
+def _generate_text(prompt: str, max_tokens: int = 8192, image_bytes: Optional[bytes] = None,
+                   think_off: bool = False, rating_key: bool = False) -> Optional[str]:
+    """NaraRouter — первичный провайдер, Google — fallback."""
+    text = _nara_chat(prompt, max_tokens, image_bytes,
+                      api_key=_nara_api_key(ratings=rating_key))
+    if text:
+        return text
+    if _nara_api_key(ratings=rating_key):
+        print("[AI] NaraRouter не ответил — пробую Google fallback.")
+    return _google_generate(prompt, max_tokens, image_bytes, think_off,
+                            api_key=_google_api_key(ratings=rating_key))
+
+
+def gemini_generate(prompt: str, max_tokens: int = 8192, raw: bool = False) -> str:
+    """Синхронный вызов ИИ (NaraRouter — первично, Google — fallback).
+    raw=True — не применять strip_markdown (для JSON-ответов)."""
+    if not _nara_api_key() and not _google_api_key():
+        return "❌ ИИ недоступен (нет API-ключа). Установи NARA_API."
+    text = _generate_text(prompt, max_tokens)
+    if not text:
+        return "❌ ИИ не вернул ответ (возможно, сработала фильтрация)."
+    if raw:
+        print(f"[AI] Raw response ({len(text)} chars): {repr(text[:200])}")
+        return text
+    return strip_markdown(text)
 
 
 
 def gemini_generate_json(prompt: str, max_tokens: int = 8192) -> str:
-    """Вызов Gemini для JSON-ответов — thinking отключён, все токены идут в ответ."""
-    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    if not api_key:
+    """Вызов ИИ для JSON-ответов."""
+    if not _nara_api_key() and not _google_api_key():
         return ""
-    try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model='gemini-3.6-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                max_output_tokens=max_tokens,
-                thinking_config=types.ThinkingConfig(thinking_budget=0)
-            )
-        )
-        text = getattr(response, 'text', None)
-        if text:
-            text = text.strip()
-            print(f"[GEMINI_JSON] Response ({len(text)} chars): {repr(text[:200])}")
-            return text
-        if response.candidates and response.candidates[0].content.parts:
-            t = response.candidates[0].content.parts[0].text.strip()
-            print(f"[GEMINI_JSON] Response from candidates ({len(t)} chars): {repr(t[:200])}")
-            return t
-        return ""
-    except Exception as e:
-        import traceback
-        print(f"[GEMINI_JSON] Ошибка: {e}")
-        traceback.print_exc()
-        return ""
+    text = _generate_text(prompt, max_tokens, think_off=True)
+    if text:
+        print(f"[AI_JSON] Response ({len(text)} chars): {repr(text[:200])}")
+        return text
+    return ""
 
 
 
 def gemini_generate_rating(prompt: str, max_tokens: int = 1024) -> Optional[dict]:
-    """Вызов Gemini через ОТДЕЛЬНЫЙ API-ключ (GOOGLE_API_KEY_RATINGS), используется
-    только для авто-оценки категорий 'еда'/'активность'/'настрой'. Модель должна
-    ответить JSON {"rating": 1-10, "comment"/"response": "..."}. Возвращает None если
+    """Авто-оценка категорий через отдельный ключ (NARA_API_RATINGS/NARA_API,
+    fallback — GOOGLE_API_KEY_RATINGS). Модель должна ответить JSON
+    {"rating": 1-10, "comment"/"response": "..."}. Возвращает None если
     ключ не настроен или запрос не удался — вызывающий код должен в этом случае
     откатиться на ручной ввод оценки, а не выдумывать число."""
-    api_key = os.environ.get("GOOGLE_API_KEY_RATINGS") or os.environ.get("GEMINI_API_KEY_RATINGS")
-    if not api_key:
+    if not _nara_api_key(ratings=True) and not _google_api_key(ratings=True):
         return None
-    text = None
+    text = _generate_text(prompt, max_tokens, think_off=True, rating_key=True)
+    if not text:
+        print("[AI-RATINGS] Пустой ответ от модели.")
+        return None
     try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model='gemini-3.6-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                max_output_tokens=max_tokens,
-                thinking_config=types.ThinkingConfig(thinking_budget=0)
-            )
-        )
-        text = getattr(response, 'text', None)
-        if not text and response.candidates and response.candidates[0].content.parts:
-            text = response.candidates[0].content.parts[0].text
-        if not text:
-            print(f"[GEMINI-RATINGS] Пустой ответ от модели. finish_reason: "
-                  f"{getattr(response.candidates[0], 'finish_reason', '?') if response.candidates else '?'}")
-            return None
         text = text.strip()
         text = re.sub(r'^```json\s*|\s*```$', '', text).strip()
         data = json.loads(text)
@@ -119,9 +191,8 @@ def gemini_generate_rating(prompt: str, max_tokens: int = 1024) -> Optional[dict
         return {'rating': rating, 'comment': comment}
     except Exception as e:
         import traceback
-        print(f"[GEMINI-RATINGS] Ошибка ({type(e).__name__}): {e}")
-        if text is not None:
-            print(f"[GEMINI-RATINGS] Ответ модели, который не удалось разобрать: {repr(text[:300])}")
+        print(f"[AI-RATINGS] Ошибка ({type(e).__name__}): {e}")
+        print(f"[AI-RATINGS] Ответ модели, который не удалось разобрать: {repr(text[:300])}")
         traceback.print_exc()
         return None
 
@@ -130,26 +201,26 @@ def gemini_generate_rating(prompt: str, max_tokens: int = 1024) -> Optional[dict
 def analyze_food_photo(image_bytes: bytes, prompt: str) -> Optional[str]:
     """Распознавание блюда/калорий по фото. Возвращает None при ошибке,
     чтобы вызывающий код мог показать кнопку повтора."""
-    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    if not api_key or not image_bytes:
+    if not image_bytes:
+        return None
+    if not _nara_api_key() and not _google_api_key():
         return None
     try:
-        client = genai.Client(api_key=api_key)
-        image_part = types.Part.from_bytes(data=image_bytes, mime_type='image/png')
-        response = client.models.generate_content(
-            model='gemini-3.6-flash',
-            contents=[image_part, prompt],
-            config=types.GenerateContentConfig(max_output_tokens=256)
-        )
-        text = (getattr(response, 'text', None) or "").strip()
-        if not text and response.candidates and response.candidates[0].content.parts:
-            text = response.candidates[0].content.parts[0].text.strip()
-        return text or None
+        return _generate_text(prompt, 256, image_bytes=image_bytes)
     except Exception as e:
         import traceback
         print(f"[FOOD PHOTO] Ошибка: {e}")
         traceback.print_exc()
         return None
+
+
+def analyze_body_photo(image_bytes: bytes, prompt: str, max_tokens: int = 2048) -> Optional[str]:
+    """Анализ фото телосложения (NaraRouter первично, Google fallback)."""
+    if not image_bytes:
+        return None
+    if not _nara_api_key() and not _google_api_key():
+        return None
+    return _generate_text(prompt, max_tokens, image_bytes=image_bytes)
 
 
 

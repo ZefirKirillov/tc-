@@ -37,18 +37,17 @@ async def _show_stats_choice(user_id: int, chat_id: int, bot: Bot, state: FSMCon
 async def handle_stats(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.message.delete()
     await _show_stats_choice(callback.from_user.id, callback.message.chat.id, bot, state)
-    await callback.answer()
 
 
 
 @router.callback_query(F.data.startswith("stats:"))
 async def show_stats(callback: CallbackQuery, bot: Bot, state: FSMContext):
     period = callback.data.split(":")[1]
-    name = get_user_name(callback.from_user.id, callback.from_user.first_name)
+    name = await run_db(get_user_name, callback.from_user.id, callback.from_user.first_name)
     temps = user_temp_messages.get(callback.from_user.id, {})
     await delete_message_safe(bot, callback.message.chat.id, temps.get('stats_choice'))
     if period == "week":
-        ratings = get_ratings(callback.from_user.id, days=7)
+        ratings = await run_db(get_ratings, callback.from_user.id, days=7)
         text = f"📊 Статистика за неделю | {name}\n\n"
         for cat, avg, count in ratings:
             bar = create_short_progress_bar(int(avg))
@@ -56,7 +55,7 @@ async def show_stats(callback: CallbackQuery, bot: Bot, state: FSMContext):
         msg = await callback.message.answer(text, reply_markup=rank_back_keyboard())
         user_temp_messages.setdefault(callback.from_user.id, {})['stats_result'] = msg.message_id
     elif period == "month":
-        ratings = get_ratings(callback.from_user.id, days=30)
+        ratings = await run_db(get_ratings, callback.from_user.id, days=30)
         text = f"📊 Статистика за месяц | {name}\n\n"
         for cat, avg, count in ratings:
             bar = create_short_progress_bar(int(avg))
@@ -65,7 +64,7 @@ async def show_stats(callback: CallbackQuery, bot: Bot, state: FSMContext):
         user_temp_messages.setdefault(callback.from_user.id, {})['stats_result'] = msg.message_id
     elif period == "chart_week":
         await callback.answer("📈 Генерирую...")
-        daily_data = get_daily_ratings(callback.from_user.id, days=7)
+        daily_data = await run_db(get_daily_ratings, callback.from_user.id, days=7)
         if not daily_data:
             msg = await callback.message.answer("❌ Нет данных для графика", reply_markup=rank_back_keyboard())
             user_temp_messages.setdefault(callback.from_user.id, {})['stats_result'] = msg.message_id
@@ -87,7 +86,7 @@ async def show_stats(callback: CallbackQuery, bot: Bot, state: FSMContext):
                 pass
     elif period == "chart_month":
         await callback.answer("📈 Генерирую...")
-        daily_data = get_daily_ratings(callback.from_user.id, days=30)
+        daily_data = await run_db(get_daily_ratings, callback.from_user.id, days=30)
         if not daily_data:
             msg = await callback.message.answer("❌ Нет данных для графика", reply_markup=rank_back_keyboard())
             user_temp_messages.setdefault(callback.from_user.id, {})['stats_result'] = msg.message_id
@@ -107,14 +106,13 @@ async def show_stats(callback: CallbackQuery, bot: Bot, state: FSMContext):
                 os.remove(chart_path)
             except OSError:
                 pass
-    await callback.answer()
 
 
 
 async def _show_rank(user_id: int, chat_id: int, bot: Bot, state: FSMContext):
     await state.clear()
-    rank_data = get_or_create_rank_data(user_id)
-    name = get_user_name(user_id)
+    rank_data = await run_db(get_or_create_rank_data, user_id)
+    name = await run_db(get_user_name, user_id)
     rank_id = rank_data['current_rank']
     total = rank_data['total_sparks']
     needed, next_total = get_sparks_for_next_rank(rank_id, total)
@@ -141,4 +139,3 @@ async def _show_rank(user_id: int, chat_id: int, bot: Bot, state: FSMContext):
 async def handle_rank(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.message.delete()
     await _show_rank(callback.from_user.id, callback.message.chat.id, bot, state)
-    await callback.answer()

@@ -46,9 +46,18 @@ def log_ratings_ai_diagnostics():
     молча ничего не делают (это осознанное поведение - чтобы не выдумывать оценку),
     поэтому по симптомам ('значения не обновляются', 'настрой всегда просит оценить вручную')
     это выглядит как баг, хотя на самом деле просто не задана переменная окружения."""
-    key_present = bool(os.environ.get("GOOGLE_API_KEY_RATINGS") or os.environ.get("GEMINI_API_KEY_RATINGS"))
-    print(f"[RATINGS-AI] GOOGLE_API_KEY_RATINGS настроен: {key_present}")
+    key_present = bool(
+        os.environ.get("NARA_API") or os.environ.get("NARA_API_KEY")
+        or os.environ.get("NARA_API_RATINGS") or os.environ.get("NARA_API_KEY_RATINGS")
+        or os.environ.get("GOOGLE_API_KEY_RATINGS") or os.environ.get("GEMINI_API_KEY_RATINGS")
+    )
+    print(f"[RATINGS-AI] Ratings AI key настроен: {key_present} "
+          f"(Nara: {bool(os.environ.get('NARA_API') or os.environ.get('NARA_API_KEY'))})")
     if not key_present:
         print("[RATINGS-AI] ⚠️ Ключ не задан - авто-оценка 'еда'/'активность' и AI-оценка 'настроя' "
               "не будут работать (тихо ничего не делают), 'настрой' всегда будет уходить в ручной ввод. "
-              "Задайте переменную окружения GOOGLE_API_KEY_RATINGS с ключом Google AI Studio.")
+              "Задайте переменную окружения NARA_API (тот же ключ покрывает и рейтинги), "
+              "либо NARA_API_RATINGS / GOOGLE_API_KEY_RATINGS для отдельного ключа.")
+    else:
+        print(f"[AI] NaraRouter: base={os.environ.get('NARA_BASE_URL', 'https://router.bynara.id/v1')}, "
+              f"model={os.environ.get('NARA_MODEL', 'ling-3.0-flash-vl-free')}")

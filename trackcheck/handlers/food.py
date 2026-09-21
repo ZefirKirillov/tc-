@@ -260,10 +260,6 @@ async def process_food_photo(message: Message, bot: Bot, state: FSMContext):
     image.save(img_buffer, format='PNG')
     image_bytes = img_buffer.getvalue()
 
-    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        await wait_msg.edit_text("❌ ИИ недоступен (нет API-ключа).")
-        return
     prompt = """Посмотри на фото еды и оцени калорийность.
 
     Ответь строго в формате: [название блюда] [число ккал]

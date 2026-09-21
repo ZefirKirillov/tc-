@@ -30,6 +30,26 @@ from trackcheck.handlers.stats import _show_stats_choice, _show_rank
 SCREEN_RENDER: Dict[str, Any] = {}
 
 
+_MAIN_MENU_CALLBACKS = frozenset({
+    "menu_reflection", "menu_rank", "menu_workouts",
+    "menu_ai", "menu_diet", "menu_tasks",
+})
+
+
+def _is_main_menu_keyboard(keyboard) -> bool:
+    """Главное меню — корневой экран: «Назад» туда не дописываем."""
+    try:
+        rows = keyboard.inline_keyboard or []
+        callbacks = {
+            btn.callback_data
+            for row in rows for btn in row
+            if getattr(btn, "callback_data", None)
+        }
+        return bool(callbacks) and callbacks <= _MAIN_MENU_CALLBACKS
+    except Exception:
+        return False
+
+
 async def render_screen(bot: Bot, user_id: int, chat_id: int, state: FSMContext, screen: str):
     render = SCREEN_RENDER.get(screen) or SCREEN_RENDER.get("main")
     await render(bot, user_id, chat_id, state)
@@ -39,11 +59,13 @@ async def _screen_send(bot, user_id, chat_id, text, keyboard, temps_key):
     await delete_message_safe(bot, chat_id, temps.get(temps_key))
     # Гарантируем кнопку «Назад» под любым экраном: если клавиатуры нет —
     # ставим только «Назад», если есть — дописываем строку с «Назад».
+    # Главное меню («main_menu_keyboard») — исключение: это корневой экран,
+    # кнопки «Назад» там нет. Определяем его по callback_data кнопок.
     if keyboard is None:
         keyboard = back_reply_keyboard()
     else:
         rows = getattr(keyboard, "inline_keyboard", None)
-        if rows is not None:
+        if rows is not None and not _is_main_menu_keyboard(keyboard):
             keyboard = InlineKeyboardMarkup(inline_keyboard=with_back_kb(rows))
     msg = await bot.send_message(chat_id, text, reply_markup=keyboard)
     temps[temps_key] = msg.message_id

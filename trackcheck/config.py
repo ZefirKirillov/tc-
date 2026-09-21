@@ -10,6 +10,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 
 
+NARA_API_KEY = os.getenv("NARA_API") or os.getenv("NARA_API_KEY")
+NARA_BASE_URL = os.getenv("NARA_BASE_URL", "https://router.bynara.id/v1")
+NARA_MODEL = os.getenv("NARA_MODEL", "ling-3.0-flash-vl-free")
+
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 

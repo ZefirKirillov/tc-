@@ -6,8 +6,6 @@ from aiogram import Bot, F
 from aiogram.enums import ChatAction
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from google import genai
-from google.genai import types
 
 from trackcheck.database.connection import db
 from trackcheck.database.repositories import (
@@ -23,7 +21,7 @@ from trackcheck.services.ai_service import (
     gemini_generate, gemini_generate_rating, gemini_generate_plan,
     gemini_parse_manual_plan, _fallback_parse_plan, gemini_session_feedback,
     gemini_monthly_review, get_full_context_for_ai, analyze_low_rating,
-    analyze_food_photo,
+    analyze_food_photo, analyze_body_photo,
 )
 from trackcheck.services.workout_service import _format_full_plan
 from trackcheck.services.gamification_service import get_rank_name
@@ -79,7 +77,7 @@ async def _retry_mood_rating(callback, bot, state):
     data = await state.get_data()
     description = data.get("retry_mood_description", "")
     user_id = callback.from_user.id
-    name = get_user_name(user_id, callback.from_user.first_name)
+    name = await run_db(get_user_name, user_id, callback.from_user.first_name)
     full_context = await run_db(get_full_context_for_ai, user_id)
     prompt = f"""Ты — заботливый персональный трекер-ассистент. Пользователя зовут {name}.
 Он(а) описал(а) свой сегодняшний день и настроение так: "{description}"
@@ -103,14 +101,14 @@ async def _retry_mood_rating(callback, bot, state):
         return
     today = user_today_str(user_id)
     rating = result['rating']
-    save_rating(user_id, 'настрой', rating, today)
+    await run_db(save_rating, user_id, 'настрой', rating, today)
     reply_text = f"🎯 Настрой: {rating}/10\n\n{result.get('response') or result.get('comment', '')}"
     await callback.message.edit_text(reply_text, reply_markup=reflection_keyboard())
     await state.clear()
-    all_completed = check_all_categories_completed(user_id)
+    all_completed = await run_db(check_all_categories_completed, user_id)
     if all_completed:
-        success, sparks_today, rank_up, old_rank, new_rank = add_spark(user_id, 'categories')
-        update_streak(user_id)
+        await run_db(add_spark, user_id, 'categories')
+        await run_db(update_streak, user_id)
         await send_main_menu(bot, callback.from_user.id, callback.message.chat.id)
     else:
         await show_reflection_menu(user_id, callback.message.chat.id, bot, state, callback.from_user.first_name)
@@ -120,7 +118,7 @@ async def _retry_mood_rating(callback, bot, state):
 async def _retry_ai_advice(callback, bot, state):
     data = await state.get_data()
     user_id = callback.from_user.id
-    name = get_user_name(user_id, callback.from_user.first_name)
+    name = await run_db(get_user_name, user_id, callback.from_user.first_name)
     full_context = await run_db(get_full_context_for_ai, user_id)
     prompt = data.get("retry_ai_prompt", "")
     try:
@@ -137,14 +135,14 @@ async def _retry_ai_advice(callback, bot, state):
         f"💡 <b>Совет:</b>\n\n{answer}",
         parse_mode="HTML", reply_markup=ai_reply_keyboard()
     )
-    save_last_ai_answer(user_id, answer)
+    await run_db(save_last_ai_answer, user_id, answer)
 
 
 
 async def _retry_ai_question(callback, bot, state):
     data = await state.get_data()
     user_id = callback.from_user.id
-    name = get_user_name(user_id, callback.from_user.first_name)
+    name = await run_db(get_user_name, user_id, callback.from_user.first_name)
     full_context = await run_db(get_full_context_for_ai, user_id)
     question = data.get("retry_ai_question", "")
     prompt = f"""Ты — персональный трекер-ассистент. Пользователь {name}.
@@ -168,7 +166,7 @@ async def _retry_ai_question(callback, bot, state):
         f"🤖 <b>Check AI:</b>\n\n{answer}",
         parse_mode="HTML", reply_markup=ai_reply_keyboard()
     )
-    save_last_ai_answer(user_id, answer)
+    await run_db(save_last_ai_answer, user_id, answer)
 
 
 
@@ -296,17 +294,8 @@ async def _retry_photo_analysis(callback, bot, state):
 • Слабые стороны (1-2 предложения)
 • Рекомендации (2-3 конкретных совета)
 Без воды, по делу, макс 150 слов.""")
-    image_part = types.Part.from_bytes(data=image_bytes, mime_type='image/png')
     try:
-        client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
-        response = await run_in_thread(
-            client.models.generate_content,
-            model='gemini-3.6-flash',
-            contents=[prompt, image_part],
-            config=types.GenerateContentConfig(max_output_tokens=2048)
-        )
-        text = getattr(response, 'text', None)
-        analysis = text.strip() if text else (response.candidates[0].content.parts[0].text if response.candidates and response.candidates[0].content.parts else "❌ Нет ответа")
+        analysis = await run_in_thread(analyze_body_photo, image_bytes, prompt) or "❌ Нет ответа"
     except Exception as e:
         analysis = f"❌ Ошибка: {str(e)[:100]}"
     if analysis.startswith("❌"):
@@ -491,21 +480,20 @@ async def handle_ai(callback: CallbackQuery, bot: Bot, state: FSMContext):
     temps['ai_advisor'] = msg.message_id
     nav_push(user_id, "ai")
     await state.set_state(AIAdvisorState.waiting_for_question)
-    await callback.answer()
 
 
 
 @router.callback_query(F.data == "wp_edit_retry")
 async def wp_edit_retry(callback: CallbackQuery, bot: Bot, state: FSMContext):
     data = await state.get_data()
-    plan = data.get("wp_plan") or (get_ai_plan(callback.from_user.id) or {}).get("plan")
+    plan_data = await run_db(get_ai_plan, callback.from_user.id)
+    plan = data.get("wp_plan") or (plan_data or {}).get("plan")
     await state.set_state(AIPlanState.editing_plan)
     await state.update_data(wp_plan=plan)
     await callback.message.edit_text(
         "Что хочешь изменить в плане?\n\nНапиши например:\n«убери приседания, замени на жим ногами»",
         reply_markup=wp_edit_keyboard()
     )
-    await callback.answer()
 
 
 
@@ -516,7 +504,7 @@ async def handle_ai_advice(callback: CallbackQuery, bot: Bot, state: FSMContext)
     # Удаляем вступительное сообщение бота (если ещё не удалено)
     await delete_message_safe(bot, callback.message.chat.id, temps.get('ai_advisor'))
     await bot.send_chat_action(callback.message.chat.id, action=ChatAction.TYPING)
-    name = get_user_name(user_id, callback.from_user.first_name)
+    name = await run_db(get_user_name, user_id, callback.from_user.first_name)
     full_context = await run_db(get_full_context_for_ai, user_id)
     prompt = f"""Ты — персональный трекер-ассистент. Пользователь {name}.
 
@@ -564,7 +552,6 @@ async def handle_ai_advice(callback: CallbackQuery, bot: Bot, state: FSMContext)
             reply_markup=retry_ai_keyboard("ai_advice")
         )
         await state.set_state(AIAdvisorState.waiting_for_question)
-        await callback.answer()
         return
     try:
         await bot.edit_message_text(
@@ -579,9 +566,8 @@ async def handle_ai_advice(callback: CallbackQuery, bot: Bot, state: FSMContext)
         ai_msg_id = msg.message_id
     temps['ai_response'] = ai_msg_id
     user_temp_messages[user_id] = temps
-    save_last_ai_answer(user_id, answer)
+    await run_db(save_last_ai_answer, user_id, answer)
     await state.set_state(AIAdvisorState.waiting_for_question)
-    await callback.answer()
 
 
 
@@ -596,7 +582,7 @@ async def process_ai_question(message: Message, bot: Bot, state: FSMContext):
     # Удаляем вступительное сообщение бота (НЕ вопрос пользователя!)
     await delete_message_safe(bot, message.chat.id, temps.get('ai_advisor'))
     await bot.send_chat_action(message.chat.id, action=ChatAction.TYPING)
-    name = get_user_name(user_id, message.from_user.first_name)
+    name = await run_db(get_user_name, user_id, message.from_user.first_name)
     full_context = await run_db(get_full_context_for_ai, user_id)
     await state.update_data(retry_ai_question=question, retry_action="ai_question")
     context = f"""Ты — персональный трекер-ассистент. Пользователь {name}.
@@ -661,19 +647,18 @@ async def process_ai_question(message: Message, bot: Bot, state: FSMContext):
         ai_msg_id = msg.message_id
     temps['ai_response'] = ai_msg_id
     user_temp_messages[user_id] = temps
-    save_last_ai_answer(user_id, answer)
+    await run_db(save_last_ai_answer, user_id, answer)
 
 
 
 @router.callback_query(F.data == "show_last_ai")
 async def show_last_ai(callback: CallbackQuery, bot: Bot, state: FSMContext):
     user_id = callback.from_user.id
-    last_answer = get_last_ai_answer(user_id)
+    last_answer = await run_db(get_last_ai_answer, user_id)
     if last_answer:
         await callback.message.answer(f"🤖 <b>Последний ответ ИИ:</b>\n\n{last_answer}", parse_mode="HTML", reply_markup=ai_reply_keyboard())
     else:
         await callback.answer("Нет сохранённого ответа", show_alert=True)
-    await callback.answer()
 
 
 
@@ -687,7 +672,7 @@ async def _retry_session_feedback(callback, bot, state):
         await callback.answer("Данные тренировки не найдены", show_alert=True)
         return
     await bot.send_chat_action(callback.message.chat.id, action=ChatAction.TYPING)
-    logs = get_session_exercise_logs(session_id)
+    logs = await run_db(get_session_exercise_logs, session_id)
     feedback = await run_in_thread(gemini_session_feedback, logs, exercises)
     if feedback.startswith("❌"):
         await callback.message.edit_text(
@@ -695,7 +680,6 @@ async def _retry_session_feedback(callback, bot, state):
             "🔄 Нажми кнопку чтобы попробовать ещё раз.",
             reply_markup=retry_ai_keyboard("session_feedback")
         )
-        await callback.answer()
         return
     lines = ["Тренировка завершена\n"]
     for log in logs:
@@ -704,13 +688,12 @@ async def _retry_session_feedback(callback, bot, state):
         elif log.get("result") and log["result"].get("note"):
             lines.append(f"⚠️ {log['exercise_name']} — {log['result']['note']}")
     lines.append(f"\n{feedback}")
-    plan_data = get_ai_plan(user_id)
+    plan_data = await run_db(get_ai_plan, user_id)
     next_date, next_day = get_next_training_day(plan_data, user_id) if plan_data else (None, None)
     if next_date:
         lines.append(f"\nСледующая тренировка: {next_day}, {next_date}")
-    rank_data = get_or_create_rank_data(user_id)
+    rank_data = await run_db(get_or_create_rank_data, user_id)
     if rank_data:
         lines.append(f"\n✨ Текущий ранг: {get_rank_name(rank_data['current_rank'])}!")
     await callback.message.edit_text("\n".join(lines),
                                       reply_markup=ws_rest_day_keyboard())
-    await callback.answer()

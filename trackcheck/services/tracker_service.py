@@ -12,7 +12,7 @@ from trackcheck.services.ai_service import gemini_generate_rating
 def sync_diet_rating_for_today(user_id: int):
     """Пересчитывает оценку категории 'еда' за сегодня на основе фактически
     залогированной еды. Вызывается после каждой новой записи о еде.
-    Если GOOGLE_API_KEY_RATINGS не настроен - ничего не делает (не выдумывает оценку)."""
+    Если ключ рейтингов (NARA_API / GOOGLE_API_KEY_RATINGS) не настроен - ничего не делает (не выдумывает оценку)."""
     food_log = get_today_food_log(user_id)
     if not food_log:
         return

@@ -11,6 +11,7 @@ from trackcheck.services.gamification_service import (
 )
 from trackcheck.utils.formatting import create_new_progress_bar
 from trackcheck.utils.bot_helpers import delete_temp_messages
+from trackcheck.utils.concurrency import run_db
 from trackcheck.keyboards.common import ensure_back_keyboard
 from trackcheck.keyboards.dashboard import main_menu_keyboard, urgent_tasks_keyboard
 from trackcheck.runtime import user_last_menu, user_temp_messages, nav_push
@@ -75,8 +76,16 @@ async def send_main_menu(bot: Bot, user_id: int, chat_id: int):
     # держим её на отдельном постоянном сообщении.
     await ensure_back_keyboard(bot, chat_id, user_id)
     nav_push(user_id, "main")
+    # Кнопки должны отвечать мгновенно: тяжёлые синхронные запросы к БД
+    # (через Turso — это сеть) уходят в пул потоков, а не блокируют event loop.
     try:
-        text = format_main_menu(user_id)
+        text = await run_db(format_main_menu, user_id)
+    except Exception as e:
+        import traceback
+        print(f"[BOT] ОШИБКА format_main_menu: {e}")
+        traceback.print_exc()
+        text = None
+    try:
         old_menu = user_last_menu.get(user_id)
         if old_menu:
             try:
@@ -85,10 +94,16 @@ async def send_main_menu(bot: Bot, user_id: int, chat_id: int):
                 print(f"[BOT] Не удалось удалить старое меню: {e}")
         # Удаляем временные сообщения, сохраняя важные (фото, ИИ, замеры)
         await delete_temp_messages(bot, user_id, chat_id, keep_ai=True)
+        if text is None:
+            text = "┌─ TrackCheck\n│\n│ ⚠️ Не удалось загрузить данные.\n└─────────────────────"
         msg = await bot.send_message(chat_id, text, reply_markup=main_menu_keyboard(), parse_mode="HTML")
         user_last_menu[user_id] = msg.message_id
         # Отправляем срочные задачи отдельным сообщением если есть
-        urgent = get_urgent_tasks_for_menu(user_id)
+        try:
+            urgent = await run_db(get_urgent_tasks_for_menu, user_id)
+        except Exception as e:
+            print(f"[BOT] ОШИБКА get_urgent_tasks_for_menu: {e}")
+            urgent = []
         if urgent:
             kb = urgent_tasks_keyboard(urgent, user_id)
             tasks_msg = await bot.send_message(chat_id, "⚡ Срочные задачи:", reply_markup=kb)
@@ -96,9 +111,15 @@ async def send_main_menu(bot: Bot, user_id: int, chat_id: int):
         else:
             user_temp_messages.setdefault(user_id, {}).pop('urgent_tasks', None)
     except Exception as e:
+        import traceback
         print(f"[BOT] ОШИБКА в send_main_menu: {e}")
+        traceback.print_exc()
+        # Последний шанс: показываем меню-заглушку с кнопками (без «режима
+        # восстановления» как текста — чтобы не пугать пользователя), сами
+        # кнопки при этом работают: каждый экран грузит свои данные отдельно.
         try:
-            msg = await bot.send_message(chat_id, "Меню (режим восстановления)", reply_markup=main_menu_keyboard())
+            msg = await bot.send_message(chat_id, "┌─ TrackCheck\n│\n│ ⚠️ Данные временно недоступны, выбери раздел:\n└─────────────────────",
+                                         reply_markup=main_menu_keyboard())
             user_last_menu[user_id] = msg.message_id
         except Exception as e2:
             print(f"[BOT] Критическая ошибка: {e2}")
@@ -125,4 +146,3 @@ async def back_to_main_callback(callback: CallbackQuery, bot: Bot, state: FSMCon
             except:
                 pass
     await send_main_menu(bot, user_id, callback.message.chat.id)
-    await callback.answer()

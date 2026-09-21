@@ -31,7 +31,7 @@ from trackcheck.handlers import router
 
 async def show_reflection_menu(user_id: int, chat_id: int, bot: Bot, state: FSMContext, fallback_name: Optional[str] = None):
     await state.clear()
-    name = get_user_name(user_id, fallback_name)
+    name = await run_db(get_user_name, user_id, fallback_name)
     old_menu = user_last_menu.get(user_id)
     if old_menu:
         await delete_message_safe(bot, chat_id, old_menu)
@@ -40,7 +40,7 @@ async def show_reflection_menu(user_id: int, chat_id: int, bot: Bot, state: FSMC
     await delete_message_safe(bot, chat_id, temps.pop('reflection', None))
     await delete_message_safe(bot, chat_id, temps.pop('tasks_menu', None))
     # Проверяем, заполнены ли все категории — если да, запоминаем для последующего возврата в меню
-    if check_all_categories_completed(user_id):
+    if await run_db(check_all_categories_completed, user_id):
         temps['all_categories_filled'] = True
     else:
         temps.pop('all_categories_filled', None)
@@ -48,8 +48,8 @@ async def show_reflection_menu(user_id: int, chat_id: int, bot: Bot, state: FSMC
     # Еда и активность теперь считаются автоматически (после лога еды/тренировки, либо в
     # конце дня) - если пользователь уже заполнил всё, что доступно ему вручную, незачем
     # бесконечно звать его обратно в "что оценим?" в ожидании авто-категорий.
-    if manual_categories_completed(user_id):
-        update_streak(user_id)
+    if await run_db(manual_categories_completed, user_id):
+        await run_db(update_streak, user_id)
         await bot.send_message(
             chat_id,
             f"{name}, на сегодня с рефлексией всё! 🎉\n"
@@ -68,7 +68,6 @@ async def show_reflection_menu(user_id: int, chat_id: int, bot: Bot, state: FSMC
 async def handle_reflection(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.message.delete()
     await show_reflection_menu(callback.from_user.id, callback.message.chat.id, bot, state, callback.from_user.first_name)
-    await callback.answer()
 
 
 
@@ -122,7 +121,7 @@ async def process_mood_text(message: Message, bot: Bot, state: FSMContext):
     temps['rating'] = thinking_msg.message_id
     user_temp_messages[user_id] = temps
 
-    name = get_user_name(user_id, message.from_user.first_name)
+    name = await run_db(get_user_name, user_id, message.from_user.first_name)
     full_context = await run_db(get_full_context_for_ai, user_id)
     prompt = f"""Ты — заботливый персональный трекер-ассистент. Пользователя зовут {name}.
 Он(а) описал(а) свой сегодняшний день и настроение так: "{description}"
@@ -153,15 +152,15 @@ async def process_mood_text(message: Message, bot: Bot, state: FSMContext):
 
     today = user_today_str(user_id)
     rating = result['rating']
-    save_rating(user_id, 'настрой', rating, today)
+    await run_db(save_rating, user_id, 'настрой', rating, today)
     reply_text = f"🎯 Настрой: {rating}/10\n\n{result.get('response') or result.get('comment', '')}"
     await state.clear()
     await delete_message_safe(bot, message.chat.id, temps.get('rating'))
 
-    all_completed = check_all_categories_completed(user_id)
+    all_completed = await run_db(check_all_categories_completed, user_id)
     if all_completed:
-        success, sparks_today, rank_up, old_rank, new_rank = add_spark(user_id, 'categories')
-        update_streak(user_id)
+        await run_db(add_spark, user_id, 'categories')
+        await run_db(update_streak, user_id)
         await message.answer(reply_text)
         await delete_temp_messages(bot, user_id, message.chat.id, keep_ai=True)
         await send_main_menu(bot, user_id, message.chat.id)
@@ -180,16 +179,21 @@ async def process_rating(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await delete_message_safe(bot, callback.message.chat.id, temps.get('reflection'))
     data = await state.get_data()
     category = data.get("category")
-    rating = int(callback.data.split(":")[1])
+    try:
+        rating = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        return
+    if category not in ("сон", "зависание", "еда", "активность", "настрой"):
+        return
     today = user_today_str(callback.from_user.id)
-    save_rating(callback.from_user.id, category, rating, today)
+    await run_db(save_rating, callback.from_user.id, category, rating, today)
     await state.clear()
     temps = user_temp_messages.get(callback.from_user.id, {})
     await delete_message_safe(bot, callback.message.chat.id, temps.get('rating'))
-    name = get_user_name(callback.from_user.id, callback.from_user.first_name)
+    name = await run_db(get_user_name, callback.from_user.id, callback.from_user.first_name)
 
     # Проверяем, заполнены ли все 5 категорий
-    all_completed = check_all_categories_completed(callback.from_user.id)
+    all_completed = await run_db(check_all_categories_completed, callback.from_user.id)
     # Также проверяем флаг из temp messages (если пользователь зашел повторно при заполненных категориях)
     all_filled_flag = temps.get('all_categories_filled', False)
 
@@ -206,14 +210,15 @@ async def process_rating(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await show_reflection_menu(callback.from_user.id, callback.message.chat.id, bot, state, callback.from_user.first_name)
     else:
         if all_completed:
-            success, sparks_today, rank_up, old_rank, new_rank = add_spark(callback.from_user.id, 'categories')
-            update_streak(callback.from_user.id)
+            spark_result = await run_db(add_spark, callback.from_user.id, 'categories')
+            success, sparks_today, rank_up, old_rank, new_rank = spark_result
+            await run_db(update_streak, callback.from_user.id)
             if success:
                 # Бонусная искра если все категории >= 8
-                today_ratings = get_today_ratings(callback.from_user.id)
+                today_ratings = await run_db(get_today_ratings, callback.from_user.id)
                 all_high = len(today_ratings) == 5 and all(v >= 8 for v in today_ratings.values())
                 if all_high:
-                    add_spark(callback.from_user.id, 'bonus_high')
+                    await run_db(add_spark, callback.from_user.id, 'bonus_high')
                     await callback.answer("✨ Искра + бонус за отличный день!", show_alert=False)
                 elif rank_up:
                     await callback.answer(f"✨ Новый ранг: {get_rank_name(new_rank)}!", show_alert=False)
@@ -227,21 +232,23 @@ async def process_rating(callback: CallbackQuery, bot: Bot, state: FSMContext):
             # Не все категории заполнены — показываем рефлексию снова
             await delete_message_safe(bot, callback.message.chat.id, callback.message.message_id)
             await show_reflection_menu(callback.from_user.id, callback.message.chat.id, bot, state, callback.from_user.first_name)
-    await callback.answer("✅ Сохранено!")
 
 
 
 @router.callback_query(F.data.startswith("analyze_low:"))
 async def analyze_low_rating_handler(callback: CallbackQuery, bot: Bot, state: FSMContext):
     category = callback.data.split(":")[1]
-    today_ratings = get_today_ratings(callback.from_user.id)
+    today_ratings = await run_db(get_today_ratings, callback.from_user.id)
     rating = today_ratings.get(category, 0)
     temps = user_temp_messages.get(callback.from_user.id, {})
     await delete_message_safe(bot, callback.message.chat.id, temps.get('low_rating'))
     all_filled_flag = temps.get('all_categories_filled', False)
     await bot.send_chat_action(callback.message.chat.id, action=ChatAction.TYPING)
-    await asyncio.sleep(1)
-    analysis = analyze_low_rating(callback.from_user.id, category, rating)
+    thinking_msg = await callback.message.answer("Думаю...")
+    # ИИ-вызов — блокирующий (HTTP): не держим event loop, кнопка уже
+    # подтверждена глобальным middleware, спиннера у пользователя нет.
+    analysis = await run_in_thread(analyze_low_rating, callback.from_user.id, category, rating)
+    await delete_message_safe(bot, callback.message.chat.id, thinking_msg.message_id)
     if analysis.startswith("❌"):
         await state.update_data(
             retry_low_rating_category=category,
@@ -262,8 +269,7 @@ async def analyze_low_rating_handler(callback: CallbackQuery, bot: Bot, state: F
     if all_filled_flag:
         temps['all_categories_filled'] = True
     user_temp_messages[callback.from_user.id] = temps
-    save_last_ai_answer(callback.from_user.id, analysis)
-    await callback.answer()
+    await run_db(save_last_ai_answer, callback.from_user.id, analysis)
 
 
 
@@ -277,4 +283,3 @@ async def skip_analysis(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await send_main_menu(bot, callback.from_user.id, callback.message.chat.id)
     else:
         await show_reflection_menu(callback.from_user.id, callback.message.chat.id, bot, state, callback.from_user.first_name)
-    await callback.answer()

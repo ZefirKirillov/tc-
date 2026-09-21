@@ -11,8 +11,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 from PIL import Image
-from google import genai
-from google.genai import types
 
 from trackcheck.config import WEEKDAY_KEY, WEEKDAY_RU
 from trackcheck.database.connection import db
@@ -29,7 +27,7 @@ from trackcheck.states.workout import WorkoutState, AIPlanState, WorkoutSessionS
 from trackcheck.services.ai_service import (
     gemini_generate_plan, gemini_parse_manual_plan, _fallback_parse_plan,
     gemini_edit_plan, gemini_parse_exercise_result, gemini_session_feedback,
-    gemini_adapt_next_session, gemini_monthly_review,
+    gemini_adapt_next_session, gemini_monthly_review, analyze_body_photo,
 )
 from trackcheck.services.tracker_service import sync_activity_rating_for_today
 from trackcheck.services.workout_service import (
@@ -127,25 +125,12 @@ async def analyze_photo(message: Message, bot: Bot, state: FSMContext):
         retry_photo_prompt=prompt,
         retry_action="photo_analysis"
     )
-    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        analysis = "❌ ИИ недоступен (нет API-ключа)."
-    else:
-        try:
-            client = genai.Client(api_key=api_key)
-            image_part = types.Part.from_bytes(data=image_bytes, mime_type='image/png')
-            response = await run_in_thread(
-                client.models.generate_content,
-                model='gemini-3.6-flash',
-                contents=[prompt, image_part],
-                config=types.GenerateContentConfig(max_output_tokens=2048)
-            )
-            text = getattr(response, 'text', None)
-            analysis = text.strip() if text else (response.candidates[0].content.parts[0].text if response.candidates and response.candidates[0].content.parts else "❌ Нет ответа")
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            analysis = f"❌ Ошибка: {str(e)[:100]}"
+    try:
+        analysis = await run_in_thread(analyze_body_photo, image_bytes, prompt) or "❌ ИИ недоступен (нет API-ключа)."
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        analysis = f"❌ Ошибка: {str(e)[:100]}"
 
     await delete_message_safe(bot, chat_id, status_msg.message_id)
     if analysis.startswith("❌"):
