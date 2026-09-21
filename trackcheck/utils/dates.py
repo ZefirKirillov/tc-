@@ -23,6 +23,10 @@ def get_user_timezone(user_id: int) -> str:
 
 
 def set_user_timezone(user_id: int, tz_name: str):
+    try:
+        ZoneInfo(tz_name)
+    except Exception:
+        raise ValueError(f"Unknown timezone: {tz_name!r}")
     db.execute('''
         INSERT INTO user_settings (user_id, timezone) VALUES (?, ?)
         ON CONFLICT(user_id) DO UPDATE SET timezone = excluded.timezone

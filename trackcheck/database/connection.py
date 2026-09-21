@@ -367,6 +367,15 @@ def init_db():
             completed_at TEXT
         )
     ''')
+    # One AI workout session per user per date. Idempotent: safe to run on
+    # every startup and on databases created before this index existed.
+    # NOTE: on a database that already contains duplicate (user_id, date)
+    # rows this statement fails — resolve duplicates first (see the
+    # production migration plan), never silently.
+    db.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_ai_workout_sessions_user_date
+        ON ai_workout_sessions(user_id, date)
+    ''')
     db.execute('''
         CREATE TABLE IF NOT EXISTS ai_exercise_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

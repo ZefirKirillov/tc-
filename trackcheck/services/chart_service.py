@@ -1,7 +1,19 @@
 from datetime import datetime
+import os
+import tempfile
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+
+def _unique_chart_path(prefix: str, user_id: int) -> str:
+    """Unique PNG path per chart so two concurrent generations for the same
+    user can never overwrite/remove each other's file (the old fixed-name
+    files like workout_chart_<id>.png raced). Caller still owns the file and
+    must os.remove() it after sending."""
+    fd, path = tempfile.mkstemp(prefix=f"{prefix}_{user_id}_", suffix=".png")
+    os.close(fd)
+    return path
 
 
 def build_workout_progress_chart(user_id: int, rows: list, ex_type: str) -> str:
@@ -11,7 +23,10 @@ def build_workout_progress_chart(user_id: int, rows: list, ex_type: str) -> str:
         weights = []
         for r in rows:
             reps_str = r[2]
-            reps_list = [int(x) for x in reps_str.split(',')] if reps_str else []
+            try:
+                reps_list = [int(x) for x in reps_str.split(',')] if reps_str else []
+            except (ValueError, AttributeError):
+                reps_list = []
             avg = sum(reps_list)/len(reps_list) if reps_list else 0
             avg_reps.append(avg)
             weights.append(r[3] or 0)
@@ -29,7 +44,7 @@ def build_workout_progress_chart(user_id: int, rows: list, ex_type: str) -> str:
         fig.add_trace(go.Scatter(x=dates, y=pace, mode='lines+markers', name='Темп'), row=3, col=1)
         fig.update_layout(title="Прогресс кардио", height=800, showlegend=False, template='plotly_dark')
 
-    chart_path = f"workout_chart_{user_id}.png"
+    chart_path = _unique_chart_path("workout_chart", user_id)
     fig.write_image(chart_path, scale=2)
     return chart_path
 
@@ -49,6 +64,6 @@ def build_diet_chart(user_id: int, weight_rows: list, fat_rows: list) -> str:
         fig.add_trace(go.Scatter(x=dates_fat, y=fats, mode='lines+markers', name='% жира'), row=2, col=1)
     fig.update_layout(title="Динамика веса и % жира", height=600, showlegend=False, template='plotly_dark')
 
-    chart_path = f"diet_chart_{user_id}.png"
+    chart_path = _unique_chart_path("diet_chart", user_id)
     fig.write_image(chart_path, scale=2)
     return chart_path

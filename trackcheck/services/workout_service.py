@@ -69,7 +69,8 @@ def format_exercise_card(exercise: dict, index: int, total: int, prev_result: di
 
 def apply_monthly_changes(user_id: int, plan_data: dict, accepted_indices: list, changes: list) -> dict:
     """Применяет принятые изменения к плану."""
-    plan = plan_data["plan"].copy()
+    import copy
+    plan = copy.deepcopy(plan_data["plan"])
     for i in accepted_indices:
         if i >= len(changes):
             continue

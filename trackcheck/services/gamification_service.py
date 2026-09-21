@@ -16,7 +16,7 @@ def get_current_rank(total_sparks: int) -> int:
 
 def get_sparks_for_next_rank(current_rank: int, total_sparks: int) -> Tuple[int, int]:
     if current_rank >= 8:
-        return (0, 365)
+        return (0, total_sparks)
     next_rank = current_rank + 1
     next_sparks_needed = RANKS[next_rank]["sparks_needed"]
     sparks_needed = next_sparks_needed - total_sparks

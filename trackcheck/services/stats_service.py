@@ -1,5 +1,7 @@
 from collections import defaultdict
 from datetime import datetime
+import os
+import tempfile
 
 import plotly.graph_objects as go
 
@@ -41,6 +43,7 @@ def create_line_chart(daily_data: list, user_id: int, days: int = 7) -> str:
         height=500, template='plotly_dark'
     )
 
-    chart_path = f"reflection_chart_{user_id}.png"
+    chart_path_fd, chart_path = tempfile.mkstemp(prefix=f"reflection_chart_{user_id}_", suffix=".png")
+    os.close(chart_path_fd)
     fig.write_image(chart_path, scale=2)
     return chart_path

@@ -458,11 +458,12 @@ async def food_confirm_manual(callback: CallbackQuery, bot: Bot, state: FSMConte
 
 @router.message(DietState.manual_calories)
 async def manual_calories(message: Message, bot: Bot, state: FSMContext):
+    import math
     try:
-        calories = float(message.text.strip().replace(',', '.'))
-        if calories <= 0 or calories > 10000:
+        calories = float((message.text or "").strip().replace(',', '.'))
+        if not math.isfinite(calories) or calories <= 0 or calories > 10000:
             raise ValueError
-    except ValueError:
+    except (ValueError, AttributeError):
         await message.answer("❌ Введи корректное число калорий (например, 350):")
         return
 
@@ -566,10 +567,10 @@ async def diet_log_weight_reply(callback: CallbackQuery, bot: Bot, state: FSMCon
 @router.message(DietState.log_weight)
 async def diet_log_weight_finish(message: Message, bot: Bot, state: FSMContext):
     try:
-        weight = float(message.text.strip().replace(',', '.'))
-        if weight < 20 or weight > 300:
+        weight = float((message.text or "").strip().replace(',', '.'))
+        if not math.isfinite(weight) or weight < 20 or weight > 300:
             raise ValueError
-    except ValueError:
+    except (ValueError, AttributeError):
         await message.answer("❌ Введи корректный вес (например, 70.5):")
         return
 
@@ -646,7 +647,7 @@ async def diet_body_fat_calculate(message: Message, bot: Bot, state: FSMContext)
         del temps['body_fat_error']
         user_temp_messages[message.from_user.id] = temps
 
-    parts = message.text.strip().split()
+    parts = (message.text or "").strip().split()
     user_id = message.from_user.id
 
     if len(parts) not in (4, 5):
@@ -657,6 +658,8 @@ async def diet_body_fat_calculate(message: Message, bot: Bot, state: FSMContext)
 
     try:
         numbers = [float(p.replace(',', '.')) for p in parts]
+        if not all(math.isfinite(n) and n > 0 for n in numbers):
+            raise ValueError
     except ValueError:
         error_msg = await message.answer("❌ Неверный формат чисел. Используй точки или запятые.")
         temps['body_fat_error'] = error_msg.message_id
@@ -834,7 +837,7 @@ async def diet_charts_reply(callback: CallbackQuery, bot: Bot, state: FSMContext
     cursor = db.execute('SELECT date, weight FROM weight_log WHERE user_id = ? ORDER BY date', (user_id,))
     weight_rows = cursor.fetchall()
     bf_cursor = db.execute('SELECT date, body_fat FROM body_fat_log WHERE user_id = ? ORDER BY date', (user_id,))
-    fat_rows = cursor.fetchall()
+    fat_rows = bf_cursor.fetchall()
 
     if len(weight_rows) < 2 and len(fat_rows) < 2:
         err = await callback.message.answer("❌ Недостаточно данных для графиков (нужно минимум 2 записи по весу или % жира).")
@@ -845,13 +848,25 @@ async def diet_charts_reply(callback: CallbackQuery, bot: Bot, state: FSMContext
         return
 
     chart_path = await run_in_thread(build_diet_chart, user_id, weight_rows, fat_rows)
-    photo = FSInputFile(chart_path)
-    await bot.send_photo(
-        user_id,
-        photo,
-        caption="📈 Динамика веса и % жира"
-    )
-    os.remove(chart_path)
+    if chart_path is None:
+        err = await callback.message.answer("❌ Недостаточно данных для графиков (нужно минимум 2 записи по весу или % жира).")
+        await asyncio.sleep(4)
+        await delete_message_safe(bot, callback.message.chat.id, err.message_id)
+        await show_diet_menu(user_id, callback.message.chat.id, bot)
+        await callback.answer()
+        return
+    try:
+        photo = FSInputFile(chart_path)
+        await bot.send_photo(
+            user_id,
+            photo,
+            caption="📈 Динамика веса и % жира"
+        )
+    finally:
+        try:
+            os.remove(chart_path)
+        except OSError:
+            pass
 
 
 
@@ -875,10 +890,10 @@ async def diet_change_goal_reply(callback: CallbackQuery, bot: Bot, state: FSMCo
 @router.message(DietState.weight)
 async def diet_step_weight(message: Message, bot: Bot, state: FSMContext):
     try:
-        weight = float(message.text.strip().replace(',', '.'))
-        if not 20 <= weight <= 300:
+        weight = float((message.text or "").strip().replace(',', '.'))
+        if not math.isfinite(weight) or not 20 <= weight <= 300:
             raise ValueError
-    except ValueError:
+    except (ValueError, AttributeError):
         await message.answer("❌ Введи корректный вес (например, 75.5):")
         return
     try:
@@ -898,10 +913,10 @@ async def diet_step_weight(message: Message, bot: Bot, state: FSMContext):
 @router.message(DietState.height)
 async def diet_step_height(message: Message, bot: Bot, state: FSMContext):
     try:
-        height = float(message.text.strip().replace(',', '.'))
-        if not 100 <= height <= 250:
+        height = float((message.text or "").strip().replace(',', '.'))
+        if not math.isfinite(height) or not 100 <= height <= 250:
             raise ValueError
-    except ValueError:
+    except (ValueError, AttributeError):
         await message.answer("❌ Введи корректный рост (например, 175):")
         return
     try:
@@ -921,10 +936,10 @@ async def diet_step_height(message: Message, bot: Bot, state: FSMContext):
 @router.message(DietState.age)
 async def diet_step_age(message: Message, bot: Bot, state: FSMContext):
     try:
-        age = int(message.text.strip())
+        age = int((message.text or "").strip())
         if not 10 <= age <= 120:
             raise ValueError
-    except ValueError:
+    except (ValueError, AttributeError):
         await message.answer("❌ Введи корректный возраст (например, 25):")
         return
     try:
@@ -991,10 +1006,10 @@ async def diet_step_goal(callback: CallbackQuery, bot: Bot, state: FSMContext):
 @router.message(DietState.target_weight)
 async def diet_step_target_weight(message: Message, bot: Bot, state: FSMContext):
     try:
-        change = float(message.text.strip().replace(',', '.'))
-        if not 0.1 <= change <= 100:
+        change = float((message.text or "").strip().replace(',', '.'))
+        if not math.isfinite(change) or not 0.1 <= change <= 100:
             raise ValueError
-    except ValueError:
+    except (ValueError, AttributeError):
         await message.answer("❌ Введи число (например, 5):")
         return
     try:
@@ -1014,10 +1029,10 @@ async def diet_step_target_weight(message: Message, bot: Bot, state: FSMContext)
 @router.message(DietState.target_days)
 async def diet_step_target_days(message: Message, bot: Bot, state: FSMContext):
     try:
-        days = int(message.text.strip())
+        days = int((message.text or "").strip())
         if not 7 <= days <= 730:
             raise ValueError
-    except ValueError:
+    except (ValueError, AttributeError):
         await message.answer("❌ Введи число дней от 7 до 730:")
         return
     try:

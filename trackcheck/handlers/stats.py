@@ -72,14 +72,19 @@ async def show_stats(callback: CallbackQuery, bot: Bot, state: FSMContext):
             return
         temp_msg = await callback.message.answer("📈 Генерирую график...")
         chart_path = await run_db(create_line_chart, daily_data, callback.from_user.id, days=7)
-        photo = FSInputFile(chart_path)
-        await bot.send_photo(
-            callback.from_user.id,
-            photo,
-            caption="📈 Динамика за неделю"
-        )
-        await delete_message_safe(bot, callback.message.chat.id, temp_msg.message_id)
-        os.remove(chart_path)
+        try:
+            photo = FSInputFile(chart_path)
+            await bot.send_photo(
+                callback.from_user.id,
+                photo,
+                caption="📈 Динамика за неделю"
+            )
+        finally:
+            await delete_message_safe(bot, callback.message.chat.id, temp_msg.message_id)
+            try:
+                os.remove(chart_path)
+            except OSError:
+                pass
     elif period == "chart_month":
         await callback.answer("📈 Генерирую...")
         daily_data = get_daily_ratings(callback.from_user.id, days=30)
@@ -89,14 +94,19 @@ async def show_stats(callback: CallbackQuery, bot: Bot, state: FSMContext):
             return
         temp_msg = await callback.message.answer("📈 Генерирую график...")
         chart_path = await run_db(create_line_chart, daily_data, callback.from_user.id, days=30)
-        photo = FSInputFile(chart_path)
-        await bot.send_photo(
-            callback.from_user.id,
-            photo,
-            caption="📈 Динамика за месяц"
-        )
-        await delete_message_safe(bot, callback.message.chat.id, temp_msg.message_id)
-        os.remove(chart_path)
+        try:
+            photo = FSInputFile(chart_path)
+            await bot.send_photo(
+                callback.from_user.id,
+                photo,
+                caption="📈 Динамика за месяц"
+            )
+        finally:
+            await delete_message_safe(bot, callback.message.chat.id, temp_msg.message_id)
+            try:
+                os.remove(chart_path)
+            except OSError:
+                pass
     await callback.answer()
 
 

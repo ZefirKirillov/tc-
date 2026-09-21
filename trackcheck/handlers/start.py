@@ -111,7 +111,14 @@ async def _start_onboarding(callback: CallbackQuery, bot: Bot, state: FSMContext
 @router.callback_query(F.data.startswith("tz:"))
 async def handle_timezone_choice(callback: CallbackQuery, bot: Bot):
     user_id = callback.from_user.id
-    _, tz_name, context = callback.data.split(":")
+    try:
+        _, tz_name, context = callback.data.split(":")
+    except ValueError:
+        await callback.answer("❌ Ошибка выбора часового пояса", show_alert=True)
+        return
+    if tz_name not in {tz for _, tz in RUSSIAN_TIMEZONES}:
+        await callback.answer("❌ Неизвестный часовой пояс", show_alert=True)
+        return
     set_user_timezone(user_id, tz_name)
     temps = user_temp_messages.get(user_id, {})
     await delete_message_safe(bot, callback.message.chat.id, temps.pop('timezone_picker', None))

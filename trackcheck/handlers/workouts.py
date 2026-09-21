@@ -2,7 +2,6 @@ import asyncio
 import io
 import json
 import os
-import sqlite3
 from datetime import datetime
 
 from aiogram import Bot, F
@@ -23,7 +22,7 @@ from trackcheck.database.repositories import (
     get_next_training_day, get_weekly_workout_progress,
     get_current_week_session_key, get_today_plan, update_plan_json,
     update_session_exercise_plan, set_workout_goal, add_workout, add_spark,
-    update_streak, get_user_name,
+    update_streak, get_user_name, _is_unique_violation,
     _deduct_spark_for_skip,
 )
 from trackcheck.states.workout import WorkoutState, AIPlanState, WorkoutSessionState
@@ -1956,8 +1955,11 @@ async def workout_create_category_type(callback: CallbackQuery, bot: Bot, state:
     try:
         db.execute('INSERT INTO exercise_categories (user_id, name, ex_type) VALUES (?, ?, ?)', (user_id, cat_name, ex_type))
         db.commit()
-    except sqlite3.IntegrityError:
-        await callback.answer("❌ Такая категория уже существует.", show_alert=True)
+    except Exception as e:
+        if _is_unique_violation(e):
+            await callback.answer("❌ Такая категория уже существует.", show_alert=True)
+        else:
+            raise
     await workout_manage_after_action(user_id, callback.message.chat.id, bot)
     await callback.answer()
 
@@ -2030,8 +2032,11 @@ async def workout_rename_category_finish(message: Message, bot: Bot, state: FSMC
     try:
         db.execute('UPDATE exercise_categories SET name = ? WHERE id = ? AND user_id = ?', (new_name, cat_id, user_id))
         db.commit()
-    except sqlite3.IntegrityError:
-        await message.answer("❌ Категория с таким именем уже существует.")
+    except Exception as e:
+        if _is_unique_violation(e):
+            await message.answer("❌ Категория с таким именем уже существует.")
+        else:
+            raise
     await workout_manage_after_action(user_id, message.chat.id, bot)
 
 
@@ -2198,7 +2203,9 @@ async def workout_create_exercise(message: Message, bot: Bot, state: FSMContext)
         cursor = db.execute('INSERT INTO exercises (user_id, category_id, name) VALUES (?, ?, ?)', (user_id, cat_id, ex_name))
         db.commit()
         new_ex_id = cursor.lastrowid
-    except sqlite3.IntegrityError:
+    except Exception as e:
+        if not _is_unique_violation(e):
+            raise
         await message.answer("❌ Такое упражнение уже есть в этой категории.")
         await workout_manage_exercises_cat(user_id, message.chat.id, cat_id, bot)
         return
@@ -2233,7 +2240,8 @@ async def set_goal_strength(callback: CallbackQuery, bot: Bot, state: FSMContext
 
 @router.message(WorkoutState.setting_strength_goal)
 async def set_strength_goal_finish(message: Message, bot: Bot, state: FSMContext):
-    text = message.text.strip()
+    import math
+    text = (message.text or "").strip()
     user_id = message.from_user.id
     temps = user_temp_messages.get(user_id, {})
     await delete_message_safe(bot, message.chat.id, message.message_id)
@@ -2249,7 +2257,8 @@ async def set_strength_goal_finish(message: Message, bot: Bot, state: FSMContext
     for part in parts[1:]:
         try:
             num = float(part.replace(',', '.'))
-            numbers.append(num)
+            if math.isfinite(num) and num >= 0:
+                numbers.append(num)
         except ValueError:
             continue
 
@@ -2301,7 +2310,8 @@ async def set_goal_cardio(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
 @router.message(WorkoutState.setting_cardio_goal)
 async def set_cardio_goal_finish(message: Message, bot: Bot, state: FSMContext):
-    text = message.text.strip()
+    import math
+    text = (message.text or "").strip()
     user_id = message.from_user.id
     temps = user_temp_messages.get(user_id, {})
     await delete_message_safe(bot, message.chat.id, message.message_id)
@@ -2316,6 +2326,9 @@ async def set_cardio_goal_finish(message: Message, bot: Bot, state: FSMContext):
     try:
         target_distance = float(parts[0].replace(',', '.'))
         target_duration = int(parts[1])
+        if (not math.isfinite(target_distance) or not 0 < target_distance <= 1000
+                or not 0 < target_duration <= 24 * 60):
+            raise ValueError
     except ValueError:
         msg = await message.answer("❌ Неверный формат чисел.")
         user_temp_messages.setdefault(user_id, {})['workout_temp'] = msg.message_id
@@ -2403,8 +2416,11 @@ async def workout_rename_exercise_finish(message: Message, bot: Bot, state: FSMC
     try:
         db.execute('UPDATE exercises SET name = ? WHERE id = ? AND user_id = ?', (new_name, ex_id, user_id))
         db.commit()
-    except sqlite3.IntegrityError:
-        await message.answer("❌ Упражнение с таким именем уже существует в этой категории.")
+    except Exception as e:
+        if _is_unique_violation(e):
+            await message.answer("❌ Упражнение с таким именем уже существует в этой категории.")
+        else:
+            raise
     if cat_id:
         await workout_manage_exercises_cat(user_id, message.chat.id, cat_id, bot)
     else:
@@ -2840,13 +2856,18 @@ async def workout_charts_generate(callback: CallbackQuery, bot: Bot, state: FSMC
         return
 
     chart_path = await run_in_thread(build_workout_progress_chart, user_id, rows, ex_type)
-    photo = FSInputFile(chart_path)
-    await callback.bot.send_photo(
-        user_id,
-        photo,
-        caption="📈 Прогресс упражнения"
-    )
-    os.remove(chart_path)
+    try:
+        photo = FSInputFile(chart_path)
+        await callback.bot.send_photo(
+            user_id,
+            photo,
+            caption="📈 Прогресс упражнения"
+        )
+    finally:
+        try:
+            os.remove(chart_path)
+        except OSError:
+            pass
     await callback.answer()
 
 

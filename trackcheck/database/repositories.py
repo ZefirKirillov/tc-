@@ -415,12 +415,25 @@ def save_body_fat(user_id: int, body_fat: float):
 
 
 
+def _is_unique_violation(exc: BaseException) -> bool:
+    """True if exc is a UNIQUE-constraint violation on either backend.
+
+    sqlite3 raises sqlite3.IntegrityError; the Turso/libsql client raises its
+    own error type with a message mentioning UNIQUE constraint. Fall back to
+    message matching so duplicate inserts stay idempotent in both modes."""
+    if isinstance(exc, sqlite3.IntegrityError):
+        return True
+    msg = str(exc).upper()
+    return "UNIQUE" in msg and "CONSTRAINT" in msg
+
+
 def add_my_food(user_id: int, name: str, calories: float):
     try:
         db.execute('INSERT INTO my_foods (user_id, name, calories) VALUES (?, ?, ?)', (user_id, name, calories))
         db.commit()
-    except sqlite3.IntegrityError:
-        pass
+    except Exception as e:
+        if not _is_unique_violation(e):
+            raise
 
 
 
@@ -458,6 +471,8 @@ def calculate_tdee(bmr: float, activity_level: float) -> float:
 
 def calculate_daily_calories(tdee: float, goal_type: str, target_weight_change: float, target_days: int, gender: str) -> Tuple[float, str]:
     if goal_type == 'maintain':
+        return tdee, "ok"
+    if not target_days or target_days <= 0:
         return tdee, "ok"
     total_energy = abs(target_weight_change) * 7700
     daily_adjustment = total_energy / target_days
@@ -673,7 +688,8 @@ def get_today_plan(plan_data: dict, user_id: Optional[int] = None) -> Optional[l
 def get_today_session(user_id: int) -> Optional[dict]:
     today = user_today_str(user_id)
     cursor = db.execute(
-        "SELECT * FROM ai_workout_sessions WHERE user_id = ? AND date = ?",
+        "SELECT * FROM ai_workout_sessions WHERE user_id = ? AND date = ? "
+        "ORDER BY id ASC LIMIT 1",
         (user_id, today)
     )
     row = cursor.fetchone()
@@ -701,13 +717,22 @@ def create_today_session(user_id: int, plan_data: dict) -> Optional[dict]:
     session_key = f"{week_key}_{today_key}"
     plan_json = json.dumps(today_exercises, ensure_ascii=False)
     try:
+        # NOTE: plain INSERT (not INSERT ... ON CONFLICT DO NOTHING), because
+        # SQLite rejects the ON CONFLICT clause when the matching unique
+        # index does not exist yet (pre-migration databases). The unique
+        # violation is handled just below, so the race is still safe once
+        # ux_ai_workout_sessions_user_date exists.
         db.execute("""
             INSERT INTO ai_workout_sessions (user_id, date, weekday, session_key, plan_json, status)
             VALUES (?, ?, ?, ?, ?, 'pending')
         """, (user_id, today, weekday, session_key, plan_json))
         db.commit()
     except Exception as e:
-        print(f"[SESSION] Insert error: {e}")
+        # A concurrent insert winning the race is fine — the re-read below
+        # returns the winner deterministically (ORDER BY id ASC LIMIT 1).
+        # Unique-violation noise is expected here; anything else is logged.
+        if not _is_unique_violation(e):
+            print(f"[SESSION] Insert error: {e}")
     return get_today_session(user_id)
 
 
@@ -782,7 +807,7 @@ def update_session_exercise_plan(user_id: int, session_id: int,
 def get_next_training_day(plan_data: dict, user_id: Optional[int] = None) -> Optional[str]:
     """Возвращает дату и название следующей тренировки."""
     plan = plan_data["plan"]
-    start_date = plan_data["start_date"]
+    start_date = plan_data.get("start_date")
     today = user_today_date(user_id) if user_id is not None else datetime.now().date()
     today_weekday = today.weekday()
 
@@ -790,7 +815,11 @@ def get_next_training_day(plan_data: dict, user_id: Optional[int] = None) -> Opt
         check_date = today + timedelta(days=offset)
         check_weekday = check_date.weekday()
         check_wd_key = WEEKDAY_KEY[check_weekday]
-        weeks_passed = (check_date - datetime.strptime(start_date, "%Y-%m-%d").date()).days // 7
+        try:
+            start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            start = today
+        weeks_passed = (check_date - start).days // 7
         cycle_weeks = plan_data.get("cycle_weeks", 1)
         week_idx = (weeks_passed % cycle_weeks) + 1
         week_key = f"week_{week_idx}"
