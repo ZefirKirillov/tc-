@@ -1,7 +1,9 @@
 import base64
+import inspect
 import json
 import os
 import re
+import time
 import urllib.request
 from typing import Optional
 
@@ -44,18 +46,57 @@ def _google_api_key(ratings: bool = False) -> Optional[str]:
     return os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
 
 
+# Имя последнего сработавшего провайдера/модели — для логов и отладки.
+# Обновляется каждым вызовом _generate_text: {'provider': 'nara'|'google'|None,
+# 'model': ..., 'reason': ...}. reason объясняет, почему Nara не сработала
+# и произошёл fallback (или почему не сработал никто).
+LAST_AI_CALL: dict = {"provider": None, "model": None, "reason": None}
+
+
+def _auto_caller() -> str:
+    """Имя ближайшего публичного gemini_*/analyze_* вызова в стеке.
+
+    Позволяет в логе [AI-ROUTE] видеть, какая фича бота сделала запрос
+    (план тренировок, оценка настроения, разбор фото и т.д.), без ручной
+    передачи caller= через всю цепочку вызовов."""
+    try:
+        for frame in inspect.stack()[2:]:
+            name = frame.function
+            if (name.startswith("gemini_") or name.startswith("analyze_")) \
+                    and not name.startswith("_"):
+                return name
+    except Exception:
+        pass
+    return "?"
+
+
+def _log_ai_call(caller: str, detail: str = "") -> None:
+    info = LAST_AI_CALL
+    msg = (f"[AI-ROUTE] caller={caller} provider={info.get('provider')} "
+           f"model={info.get('model')} reason={info.get('reason')}")
+    if detail:
+        msg += f" | {detail}"
+    print(msg)
+
+
 def _nara_chat(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None,
                api_key: Optional[str] = None) -> Optional[str]:
-    """Прямой вызов NaraRouter через OpenAI-совместимый /chat/completions."""
+    """Прямой вызов NaraRouter через OpenAI-совместимый /chat/completions.
+
+    Возвращает текст ответа или None. Причину неудачи пишет в
+    LAST_AI_CALL['reason']: 'no_key' | 'empty' | 'http_<code>: <body>' |
+    'exception: <ClassName>: <msg>'."""
     key = api_key if api_key is not None else _nara_api_key()
     if not key:
+        LAST_AI_CALL.update(provider=None, model=None, reason="no_key")
         return None
     if isinstance(image_bytes, bytes) and len(image_bytes) == 0:
         image_bytes = None
+    started = time.monotonic()
     try:
         if image_bytes:
             b64 = base64.b64encode(image_bytes).decode("ascii")
-            content = [
+            content: object = [
                 {"type": "text", "text": prompt},
                 {"type": "image_url",
                  "image_url": {"url": f"data:image/png;base64,{b64}"}},
@@ -77,30 +118,87 @@ def _nara_chat(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=120) as resp:
+            status = getattr(resp, "status", "?")
             body = json.loads(resp.read().decode("utf-8"))
+        elapsed = time.monotonic() - started
+        # Какая модель реально ответила: доверяем полю "model" из ответа
+        # роутера (может отличаться от запрошенной при remap на стороне Nara).
+        served_model = body.get("model") or NARA_MODEL
         choices = body.get("choices") or []
         if choices:
             msg = choices[0].get("message") or {}
             text = (msg.get("content") or "").strip()
             if text:
+                LAST_AI_CALL.update(provider="nara", model=served_model,
+                                    reason=f"ok http={status} {elapsed:.1f}s "
+                                           f"finish={choices[0].get('finish_reason')}")
+                print(f"[NARA] OK model={served_model} http={status} "
+                      f"{elapsed:.1f}s ({len(text)} chars)")
                 return text
-        print(f"[NARA] Пустой ответ от роутера: {repr(str(body)[:200])}")
+        LAST_AI_CALL.update(provider=None, model=served_model,
+                            reason=f"empty http={status} {elapsed:.1f}s "
+                                   f"body={repr(str(body)[:200])}")
+        print(f"[NARA] Пустой ответ от роутера (model={served_model}): "
+              f"{repr(str(body)[:200])}")
         return None
     except Exception as e:
         import traceback
-        print(f"[NARA] Ошибка: {e}")
+        elapsed = time.monotonic() - started
+        reason = _describe_http_error(e)
+        LAST_AI_CALL.update(provider=None, model=NARA_MODEL,
+                            reason=f"{reason} after={elapsed:.1f}s")
+        print(f"[NARA] Ошибка ({reason}, {elapsed:.1f}s): {e}")
         traceback.print_exc()
         return None
 
 
+def _describe_http_error(e: Exception) -> str:
+    """Короткое объяснение HTTP-ошибки: статус + тело ответа, если есть."""
+    status = getattr(e, "code", None) or getattr(e, "status", None)
+    body = ""
+    try:
+        raw = e.read() if hasattr(e, "read") else None
+        if raw:
+            body = raw.decode("utf-8", errors="replace")[:300]
+    except Exception:
+        pass
+    if status:
+        hint = ""
+        if status == 401:
+            hint = " (неверный/отсутствующий NARA_API?)"
+        elif status == 402:
+            hint = " (кончились кредиты/квота на роутере?)"
+        elif status == 404:
+            hint = f" (модель '{NARA_MODEL}' не найдена на роутере?)"
+        elif status == 429:
+            hint = " (rate limit — слишком много запросов?)"
+        elif status == 400:
+            hint = " (роутер отклонил payload — max_tokens/vision формат?)"
+        elif int(status) >= 500:
+            hint = " (ошибка на стороне роутера/провайдера)"
+        return f"http_{status}{hint} body={body!r}" if body else f"http_{status}{hint}"
+    return f"exception: {type(e).__name__}: {e}"
+
+
 def _google_generate(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None,
                      think_off: bool = False, api_key: Optional[str] = None) -> Optional[str]:
-    """Fallback на прямой Google API. Возвращает None при ошибке/отсутствии ключа."""
+    """Fallback на прямой Google API. Возвращает None при ошибке/отсутствии ключа.
+    Успех/неудачу пишет в LAST_AI_CALL (не затирает reason от Nara при успехе —
+    дописывает его как fallback_reason)."""
     if not _GOOGLE_AVAILABLE:
+        LAST_AI_CALL.update(provider=None, model=None,
+                            reason=(LAST_AI_CALL.get("reason") or "n/a")
+                            + " + google_unavailable (пакет google-genai не установлен)")
+        print("[GEMINI] Fallback пропущен: пакет google-genai не установлен.")
         return None
     key = api_key if api_key is not None else _google_api_key()
     if not key:
+        prev = LAST_AI_CALL.get("reason") or "n/a"
+        LAST_AI_CALL.update(provider=None, model=None,
+                            reason=f"{prev} + google_no_key (GOOGLE_API_KEY не задан)")
+        print("[GEMINI] Fallback пропущен: нет GOOGLE_API_KEY.")
         return None
+    started = time.monotonic()
     try:
         client = genai.Client(api_key=key)
         kwargs = {"max_output_tokens": max_tokens}
@@ -117,28 +215,56 @@ def _google_generate(prompt: str, max_tokens: int, image_bytes: Optional[bytes] 
             contents=contents,
             config=config,
         )
+        elapsed = time.monotonic() - started
         text = (getattr(response, 'text', None) or "").strip()
         if not text and response.candidates and response.candidates[0].content.parts:
             text = response.candidates[0].content.parts[0].text.strip()
-        return text or None
+        if text:
+            prev = LAST_AI_CALL.get("reason")
+            suffix = f" + fallback_reason: {prev}" if prev else ""
+            LAST_AI_CALL.update(provider="google", model=GOOGLE_MODEL,
+                                reason=f"ok {elapsed:.1f}s{suffix}")
+            print(f"[GEMINI] OK (fallback) model={GOOGLE_MODEL} {elapsed:.1f}s "
+                  f"({len(text)} chars)")
+            return text
+        LAST_AI_CALL.update(provider=None, model=GOOGLE_MODEL,
+                            reason=f"google_empty {elapsed:.1f}s "
+                                   f"(Nara: {LAST_AI_CALL.get('reason')})")
+        print(f"[GEMINI] Пустой ответ от fallback-модели {GOOGLE_MODEL}.")
+        return None
     except Exception as e:
         import traceback
-        print(f"[GEMINI] Ошибка (fallback): {e}")
+        elapsed = time.monotonic() - started
+        prev = LAST_AI_CALL.get("reason")
+        suffix = f" + fallback_reason: {prev}" if prev else ""
+        LAST_AI_CALL.update(provider=None, model=GOOGLE_MODEL,
+                            reason=f"google_exception: {type(e).__name__}: {e} "
+                                   f"after={elapsed:.1f}s{suffix}")
+        print(f"[GEMINI] Ошибка (fallback, {elapsed:.1f}s): {e}")
         traceback.print_exc()
         return None
 
 
 def _generate_text(prompt: str, max_tokens: int = 8192, image_bytes: Optional[bytes] = None,
-                   think_off: bool = False, rating_key: bool = False) -> Optional[str]:
-    """NaraRouter — первичный провайдер, Google — fallback."""
+                   think_off: bool = False, rating_key: bool = False,
+                   caller: Optional[str] = None) -> Optional[str]:
+    """NaraRouter — первичный провайдер, Google — fallback.
+
+    Каждый вызов пишет одну итоговую строку [AI-ROUTE] в лог: кто вызвал,
+    какой провайдер/модель реально ответили и почему случился fallback."""
+    caller = caller or _auto_caller()
     text = _nara_chat(prompt, max_tokens, image_bytes,
                       api_key=_nara_api_key(ratings=rating_key))
     if text:
+        _log_ai_call(caller)
         return text
+    nara_reason = LAST_AI_CALL.get("reason")
     if _nara_api_key(ratings=rating_key):
-        print("[AI] NaraRouter не ответил — пробую Google fallback.")
-    return _google_generate(prompt, max_tokens, image_bytes, think_off,
+        print(f"[AI] NaraRouter не ответил ({nara_reason}) — пробую Google fallback.")
+    text = _google_generate(prompt, max_tokens, image_bytes, think_off,
                             api_key=_google_api_key(ratings=rating_key))
+    _log_ai_call(caller)
+    return text
 
 
 def gemini_generate(prompt: str, max_tokens: int = 8192, raw: bool = False) -> str:

@@ -61,3 +61,6 @@ def log_ratings_ai_diagnostics():
     else:
         print(f"[AI] NaraRouter: base={os.environ.get('NARA_BASE_URL', 'https://router.bynara.id/v1')}, "
               f"model={os.environ.get('NARA_MODEL', 'ling-3.0-flash-vl-free')}")
+        print("[AI] Каждый ИИ-вызов логируется строкой [AI-ROUTE] "
+              "(caller/provider/model/reason); детали — в строках [NARA]/[GEMINI].")
+        print("[AI] Fallback-цепочка: NaraRouter → Google (GOOGLE_API_KEY, если задан).")
