@@ -1621,39 +1621,72 @@ async def ws_back_to_today(callback: CallbackQuery, bot: Bot, state: FSMContext)
 @router.message(WorkoutSessionState.skipping_day)
 async def ws_skip_day_reason(message: Message, bot: Bot, state: FSMContext):
     user_id = message.from_user.id
-    reason = message.text.strip() if message.text.strip() != "-" else ""
+    # Guard: photo/sticker/etc have no text — .strip() on None crashes the
+    # handler BEFORE state.clear(), leaving the user stuck in skipping_day.
+    raw = (message.text or "").strip()
+    if not raw:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        try:
+            await bot.send_message(message.chat.id, "Напиши причину текстом (или «-»):")
+        except Exception:
+            pass
+        return  # Stay in state, wait for a text message.
+    reason = "" if raw == "-" else raw[:500]
     try:
         await message.delete()
-    except:
+    except Exception:
         pass
-    plan_data = get_ai_plan(user_id)
-    if plan_data:
-        session = create_today_session(user_id, plan_data)
-        if session:
-            db.execute("""
-                UPDATE ai_workout_sessions SET status='skipped', skip_reason=? WHERE id=?
-            """, (reason, session["id"]))
-            db.commit()
-    await state.clear()
-    # Отнимаем искру за пропущенный тренировочный день
-    _deduct_spark_for_skip(user_id)
-    temps = user_temp_messages.get(user_id, {})
-    msg_id = temps.get("workout_menu")
-    text = "День пропущен."
-    plan_data = get_ai_plan(user_id)
-    next_date, next_day = get_next_training_day(plan_data, user_id) if plan_data else (None, None)
-    if next_date:
-        text += f"\nСледующая тренировка: {next_day}, {next_date}"
-    if msg_id:
+    try:
+        # Sync DB (Turso = network) must not block the event loop.
+        plan_data = await run_db(get_ai_plan, user_id)
+        if plan_data:
+            session = await run_db(create_today_session, user_id, plan_data)
+            if session:
+                await run_db(db.execute,
+                             "UPDATE ai_workout_sessions SET status='skipped', skip_reason=? WHERE id=?",
+                             (reason, session["id"]))
+                await run_db(db.commit)
+        # Отнимаем искру за пропущенный тренировочный день
+        await run_db(_deduct_spark_for_skip, user_id)
+        # Состояние сбрасываем СРАЗУ после записи — дальше только чтение и
+        # отправка, и любой их провал уже не оставит юзера в skipping_day.
+        await state.clear()
+        temps = user_temp_messages.get(user_id, {})
+        msg_id = temps.get("workout_menu")
+        text = "День пропущен."
+        plan_data = await run_db(get_ai_plan, user_id)
+        next_tuple = await run_db(get_next_training_day, plan_data, user_id) if plan_data else (None, None)
+        next_date, next_day = next_tuple if isinstance(next_tuple, (tuple, list)) else (None, None)
+        if next_date:
+            text += f"\nСледующая тренировка: {next_day}, {next_date}"
+        if msg_id:
+            try:
+                await bot.edit_message_text(text, message.chat.id, msg_id,
+                                            reply_markup=ws_rest_day_keyboard())
+                return
+            except Exception as e:
+                print(f"[SKIP] edit failed, sending new msg: {e}")
+        msg = await message.answer(text, reply_markup=ws_rest_day_keyboard())
+        temps["workout_menu"] = msg.message_id
+        user_temp_messages[user_id] = temps
+    except Exception as e:
+        import traceback
+        print(f"[SKIP] ws_skip_day_reason failed user={user_id}: {e}")
+        traceback.print_exc()
         try:
-            await bot.edit_message_text(text, message.chat.id, msg_id,
-                                         reply_markup=ws_rest_day_keyboard())
-            return
-        except:
+            await state.clear()
+        except Exception:
             pass
-    msg = await message.answer(text, reply_markup=ws_rest_day_keyboard())
-    temps["workout_menu"] = msg.message_id
-    user_temp_messages[user_id] = temps
+        try:
+            await bot.send_message(message.chat.id,
+                                   "Не удалось записать пропуск, попробуй ещё раз "
+                                   "(кнопка «Пропустил день»).")
+        except Exception:
+            pass
+        return
 
 
 

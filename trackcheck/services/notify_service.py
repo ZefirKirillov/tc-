@@ -245,7 +245,7 @@ def build_template_text(ctx: dict) -> str:
     return " • ".join(parts)[:400] if parts else "Загляни в TrackCheck 👋"
 
 
-def build_ai_text(ctx: dict) -> tuple[str, bool]:
+def build_ai_text(ctx: dict, user_id: int = 0) -> tuple[str, bool]:
     """(текст, это_ai). AI через общий fallback Nara->Google; при неудаче — шаблон."""
     from trackcheck.services import ai_service
     tasks_bit = ("нет открытых задач" if not ctx["open_tasks"]
@@ -266,7 +266,11 @@ def build_ai_text(ctx: dict) -> tuple[str, bool]:
         if text and not text.startswith("❌"):
             return text.strip()[:400], True
     except Exception as e:
-        print(f"[NOTIFY] AI error: {e}")
+        import traceback
+        print(f"[NOTIFY] AI error user={user_id} (falling back to template): {e}")
+        traceback.print_exc()
+    print(f"[NOTIFY] AI unavailable user={user_id} — "
+          f"template fallback used (last_ai={ai_service.LAST_AI_CALL})")
     return build_template_text(ctx), False
 
 
@@ -294,20 +298,25 @@ def notify_keyboard(ctx: dict):
 async def send_notification(bot, user_id: int, kind: str) -> None:
     """kind: 'hourly' | 'usual'. Проверяет тумблер/мьют, собирает контекст,
     пропускает цикл если сказать нечего (для usual) или не важное (для hourly)."""
-    if not is_notify_enabled(user_id) or is_muted(user_id):
+    from trackcheck.utils.concurrency import run_db, run_in_thread
+    enabled = await run_db(is_notify_enabled, user_id)
+    muted = await run_db(is_muted, user_id)
+    if not enabled or muted:
         return
-    ctx = collect_context(user_id)
+    ctx = await run_db(collect_context, user_id)
     important = is_important(ctx)
     if kind == "hourly" and not important:
         return  # часовой цикл — только важное
     if not has_anything_to_say(ctx):
         return
     # для usual пропускаем если всё важное уже покрыто часовым? нет — шлём,
-    # слот один, замена произойдёт ниже
-    text, via_ai = build_ai_text(ctx)
+    # слот один, замена произойдёт ниже.
+    # AI — синхронный (сеть), поэтому из event loop только через run_in_thread,
+    # иначе весь бот виснет на время запроса к Nara/Google.
+    text, via_ai = await run_in_thread(build_ai_text, ctx, user_id)
     prefix = "🔥 " if important else "🔔 "
     try:
-        old_id = get_last_notify_msg_id(user_id)
+        old_id = await run_db(get_last_notify_msg_id, user_id)
         if old_id:
             try:
                 await bot.delete_message(user_id, old_id)
@@ -315,7 +324,7 @@ async def send_notification(bot, user_id: int, kind: str) -> None:
                 pass
         msg = await bot.send_message(user_id, prefix + text,
                                      reply_markup=notify_keyboard(ctx))
-        set_last_notify_msg_id(user_id, msg.message_id)
+        await run_db(set_last_notify_msg_id, user_id, msg.message_id)
         log_action(f"NOTIFY_{kind.upper()}", user_id,
                    f"{'ai' if via_ai else 'template'} important={important}")
     except Exception as e:
@@ -323,15 +332,23 @@ async def send_notification(bot, user_id: int, kind: str) -> None:
 
 
 async def delete_last_notification(bot, user_id: int) -> None:
-    """Удаляет последнее уведомление (при новом / при взаимодействии юзера)."""
+    """Удаляет последнее уведомление (при новом / при взаимодействии юзера).
+
+    Только in-memory кэш — без похода в БД, чтобы middleware не добавляла
+    сетевой запрос к КАЖДОМУ нажатию кнопки."""
     try:
-        msg_id = get_last_notify_msg_id(user_id)
+        from trackcheck import runtime
+        msg_id = runtime.user_notify_msg.get(user_id)
         if msg_id:
             try:
                 await bot.delete_message(user_id, msg_id)
             except Exception:
                 pass
-            set_last_notify_msg_id(user_id, None)
+            runtime.user_notify_msg.pop(user_id, None)
+            # БД чистим фоном, не задерживая обработку апдейта.
+            import asyncio
+            from trackcheck.utils.concurrency import run_db as _run_db
+            asyncio.create_task(_run_db(set_last_notify_msg_id, user_id, None))
     except Exception:
         pass
 
