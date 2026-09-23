@@ -76,7 +76,12 @@ def _log_ai_call(caller: str, detail: str = "") -> None:
            f"model={info.get('model')} reason={info.get('reason')}")
     if detail:
         msg += f" | {detail}"
-    print(msg)
+    print(msg, flush=True)
+    try:
+        from trackcheck.utils.action_log import log_action
+        log_action("AI", None, f"{caller} via {info.get('provider')}/{info.get('model')}")
+    except Exception:
+        pass
 
 
 def _nara_chat(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None,

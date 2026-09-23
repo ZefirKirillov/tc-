@@ -92,9 +92,21 @@ class Database:
 
     def execute(self, query: str, params: tuple = ()):
         with self._lock:
-            is_write = query.strip().upper().startswith(
+            _q = query.strip().upper()
+            is_write = _q.startswith(
                 ('INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER', 'PRAGMA')
             )
+            if _q.startswith(('INSERT', 'UPDATE', 'DELETE')):
+                # Лог тяжёлых действий в Render livetail (stdout).
+                # Только форматирование уже имеющихся аргументов — без доп.
+                # запросов, ~микросекунды. Отключение: ACTION_LOG_ENABLED=0.
+                try:
+                    from trackcheck.utils.action_log import log_action
+                    uid = params[0] if params and isinstance(params[0], int) else None
+                    one_line = ' '.join(query.split())
+                    log_action(_q.split()[0] + '_DB', uid, one_line[:120])
+                except Exception:
+                    pass
             if self._mode == 'turso':
                 cur = self._conn.execute(query, params)
                 if is_write:
