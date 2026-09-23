@@ -8,6 +8,10 @@ user_welcome_message: Dict[int, int] = {}
 user_nav: Dict[int, List[str]] = {}
 scheduler = None
 bot_instance = None
+# Последний ID уведомления (single-slot). In-memory кэш, чтобы middleware
+# чистки не ходил в БД (сеть Turso) при каждом взаимодействии; БД — бэкап
+# на случай рестарта.
+user_notify_msg: Dict[int, int] = {}
 
 
 def nav_push(user_id: int, screen: str):

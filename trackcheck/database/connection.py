@@ -187,6 +187,12 @@ def init_db():
         db.execute("ALTER TABLE user_settings ADD COLUMN last_ai_answer TEXT DEFAULT NULL")
     if 'timezone' not in columns:
         db.execute("ALTER TABLE user_settings ADD COLUMN timezone TEXT DEFAULT NULL")
+    if 'notify_enabled' not in columns:
+        db.execute("ALTER TABLE user_settings ADD COLUMN notify_enabled INTEGER DEFAULT 1")
+    if 'notify_muted_until' not in columns:
+        db.execute("ALTER TABLE user_settings ADD COLUMN notify_muted_until TEXT DEFAULT NULL")
+    if 'notify_msg_id' not in columns:
+        db.execute("ALTER TABLE user_settings ADD COLUMN notify_msg_id INTEGER DEFAULT NULL")
     db.execute("UPDATE user_settings SET notification_enabled = 1 WHERE notification_enabled IS NULL")
     db.execute('''
         CREATE TABLE IF NOT EXISTS diet_profile (

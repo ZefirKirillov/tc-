@@ -37,6 +37,26 @@ async def main():
             hour=23, minute=55, timezone=ZoneInfo(tz_name),
             args=[tz_name], id=f"finalize_ratings_{tz_name}", replace_existing=True
         )
+
+    async def _notify_hourly():
+        from trackcheck.services.notify_service import hourly_job
+        try:
+            await hourly_job(bot)
+        except Exception as e:
+            print(f"[NOTIFY] hourly tick fail: {e}")
+
+    async def _notify_usual():
+        from trackcheck.services.notify_service import usual_job
+        try:
+            await usual_job(bot)
+        except Exception as e:
+            print(f"[NOTIFY] usual tick fail: {e}")
+
+    # часовой цикл шлёт только важное, 6-часовой — всё остальное; слот один
+    scheduler.add_job(_notify_hourly, 'interval', hours=1,
+                      id="notify_hourly", replace_existing=True)
+    scheduler.add_job(_notify_usual, 'interval', hours=6,
+                      id="notify_usual", replace_existing=True)
     scheduler.start()
     runtime.scheduler = scheduler
     print("[BOOT] Планировщик запущен")

@@ -128,8 +128,14 @@ async def _show_rank(user_id: int, chat_id: int, bot: Bot, state: FSMContext):
 
 <i>{get_rank_motivation(rank_id)}</i>"""
     await delete_temp_messages(bot, user_id, chat_id, keep_ai=True)
+    from trackcheck.handlers.notify import notify_settings_keyboard
+    from trackcheck.services.notify_service import is_notify_enabled
+    from aiogram.types import InlineKeyboardMarkup
+    base_rows = back_reply_keyboard().inline_keyboard
+    toggle_rows = notify_settings_keyboard(is_notify_enabled(user_id)).inline_keyboard
     msg = await bot.send_message(chat_id, text, parse_mode="HTML",
-                                 reply_markup=back_reply_keyboard())
+                                 reply_markup=InlineKeyboardMarkup(
+                                     inline_keyboard=toggle_rows + base_rows))
     user_temp_messages.setdefault(user_id, {})['rank'] = msg.message_id
     nav_push(user_id, "rank")
 

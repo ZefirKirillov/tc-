@@ -28,6 +28,14 @@ from trackcheck.utils.formatting import strip_markdown
 NARA_BASE_URL = os.environ.get("NARA_BASE_URL", "https://router.bynara.id/v1").rstrip("/")
 NARA_MODEL = os.environ.get("NARA_MODEL", "ling-3.0-flash-vl-free")
 GOOGLE_MODEL = os.environ.get("GOOGLE_MODEL", "gemini-3.6-flash")
+# Запасные модели Google при 503/overload на основной (по порядку).
+GOOGLE_FALLBACK_MODELS = [
+    m for m in (
+        os.environ.get("GOOGLE_FALLBACK_MODEL", "gemini-2.0-flash"),
+        "gemini-1.5-flash",
+    )
+    if m and m != GOOGLE_MODEL
+]
 
 
 def _nara_api_key(ratings: bool = False) -> Optional[str]:
@@ -111,7 +119,11 @@ def _nara_chat(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None
         payload = {
             "model": NARA_MODEL,
             "messages": [{"role": "user", "content": content}],
+            # NaraRouter под капотом маппит разные семейства моделей; часть
+            # принимает только max_completion_tokens вместо max_tokens.
+            # Шлём оба ключа — бэкенд возьмёт поддерживаемый, 400 не будет.
             "max_tokens": max_tokens,
+            "max_completion_tokens": max_tokens,
         }
         req = urllib.request.Request(
             f"{NARA_BASE_URL}/chat/completions",
@@ -185,6 +197,32 @@ def _describe_http_error(e: Exception) -> str:
     return f"exception: {type(e).__name__}: {e}"
 
 
+def _google_generate_once(model: str, prompt: str, max_tokens: int,
+                          image_bytes: Optional[bytes],
+                          think_off: bool, api_key: str) -> Optional[str]:
+    """Одна попытка generate_content на конкретной модели. Бросает исключение
+    при ошибке API (включая 503 overload) — вызыватель решает, ретраить ли."""
+    client = genai.Client(api_key=api_key)
+    kwargs = {"max_output_tokens": max_tokens}
+    if think_off:
+        kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+    config = types.GenerateContentConfig(**kwargs)
+    if image_bytes:
+        image_part = types.Part.from_bytes(data=image_bytes, mime_type='image/png')
+        contents = [image_part, prompt]
+    else:
+        contents = prompt
+    response = client.models.generate_content(
+        model=model,
+        contents=contents,
+        config=config,
+    )
+    text = (getattr(response, 'text', None) or "").strip()
+    if not text and response.candidates and response.candidates[0].content.parts:
+        text = response.candidates[0].content.parts[0].text.strip()
+    return text or None
+
+
 def _google_generate(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None,
                      think_off: bool = False, api_key: Optional[str] = None) -> Optional[str]:
     """Fallback на прямой Google API. Возвращает None при ошибке/отсутствии ключа.
@@ -204,50 +242,52 @@ def _google_generate(prompt: str, max_tokens: int, image_bytes: Optional[bytes] 
         print("[GEMINI] Fallback пропущен: нет GOOGLE_API_KEY.")
         return None
     started = time.monotonic()
-    try:
-        client = genai.Client(api_key=key)
-        kwargs = {"max_output_tokens": max_tokens}
-        if think_off:
-            kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
-        config = types.GenerateContentConfig(**kwargs)
-        if image_bytes:
-            image_part = types.Part.from_bytes(data=image_bytes, mime_type='image/png')
-            contents = [image_part, prompt]
-        else:
-            contents = prompt
-        response = client.models.generate_content(
-            model=GOOGLE_MODEL,
-            contents=contents,
-            config=config,
-        )
-        elapsed = time.monotonic() - started
-        text = (getattr(response, 'text', None) or "").strip()
-        if not text and response.candidates and response.candidates[0].content.parts:
-            text = response.candidates[0].content.parts[0].text.strip()
-        if text:
-            prev = LAST_AI_CALL.get("reason")
-            suffix = f" + fallback_reason: {prev}" if prev else ""
-            LAST_AI_CALL.update(provider="google", model=GOOGLE_MODEL,
-                                reason=f"ok {elapsed:.1f}s{suffix}")
-            print(f"[GEMINI] OK (fallback) model={GOOGLE_MODEL} {elapsed:.1f}s "
-                  f"({len(text)} chars)")
-            return text
+    # Основная модель + запасные: 503 overload часто чинится сменой модели
+    # (нагрузка распределена неравномерно), а не просто повтором.
+    last_err: Optional[Exception] = None
+    for attempt, model in enumerate([GOOGLE_MODEL, *GOOGLE_FALLBACK_MODELS]):
+        try:
+            text = _google_generate_once(model, prompt, max_tokens,
+                                         image_bytes, think_off, key)
+            elapsed = time.monotonic() - started
+            if text:
+                prev = LAST_AI_CALL.get("reason")
+                suffix = f" + fallback_reason: {prev}" if prev else ""
+                via = f" (fallback_model {model})" if attempt else ""
+                LAST_AI_CALL.update(provider="google", model=model,
+                                    reason=f"ok {elapsed:.1f}s{via}{suffix}")
+                print(f"[GEMINI] OK (fallback) model={model} {elapsed:.1f}s "
+                      f"({len(text)} chars)")
+                return text
+            print(f"[GEMINI] Пустой ответ от fallback-модели {model}.")
+        except Exception as e:
+            last_err = e
+            # 503/overload/retryable — пробуем следующую модель, остальные
+            # ошибки (401/400/403) нет смысла ретраить на других моделях.
+            msg = f"{type(e).__name__}: {e}"
+            retryable = any(s in msg for s in (
+                "503", "UNAVAILABLE", "overload", "overloaded", "high demand",
+                "500", "429", "RESOURCE_EXHAUSTED", "deadline", "timeout",
+                "Timeout", "temporarily", "try again"))
+            print(f"[GEMINI] {model}: {msg[:200]}"
+                  f"{' — пробую следующую модель' if retryable else ''}")
+            if not retryable:
+                break
+    elapsed = time.monotonic() - started
+    prev = LAST_AI_CALL.get("reason")
+    suffix = f" + fallback_reason: {prev}" if prev else ""
+    if last_err is not None:
+        import traceback
+        LAST_AI_CALL.update(provider=None, model=GOOGLE_MODEL,
+                            reason=f"google_exception: {type(last_err).__name__}: {last_err} "
+                                   f"after={elapsed:.1f}s{suffix}")
+        print(f"[GEMINI] Все модели недоступны ({elapsed:.1f}s): {last_err}")
+        traceback.print_exception(type(last_err), last_err, last_err.__traceback__)
+    else:
         LAST_AI_CALL.update(provider=None, model=GOOGLE_MODEL,
                             reason=f"google_empty {elapsed:.1f}s "
                                    f"(Nara: {LAST_AI_CALL.get('reason')})")
-        print(f"[GEMINI] Пустой ответ от fallback-модели {GOOGLE_MODEL}.")
-        return None
-    except Exception as e:
-        import traceback
-        elapsed = time.monotonic() - started
-        prev = LAST_AI_CALL.get("reason")
-        suffix = f" + fallback_reason: {prev}" if prev else ""
-        LAST_AI_CALL.update(provider=None, model=GOOGLE_MODEL,
-                            reason=f"google_exception: {type(e).__name__}: {e} "
-                                   f"after={elapsed:.1f}s{suffix}")
-        print(f"[GEMINI] Ошибка (fallback, {elapsed:.1f}s): {e}")
-        traceback.print_exc()
-        return None
+    return None
 
 
 def _generate_text(prompt: str, max_tokens: int = 8192, image_bytes: Optional[bytes] = None,
@@ -272,6 +312,29 @@ def _generate_text(prompt: str, max_tokens: int = 8192, image_bytes: Optional[by
     return text
 
 
+def _friendly_ai_error() -> str:
+    """Человекочитаемая причина последнего провала — вместо сухого 'не вернул
+    ответ' пользователь видит, что случилось и что делать."""
+    reason = (LAST_AI_CALL.get("reason") or "").lower()
+    model = LAST_AI_CALL.get("model") or ""
+    if any(s in reason for s in ("503", "unavailable", "overload",
+                                 "high demand", "overloaded")):
+        return ("❌ ИИ перегружен (модель временно не справляется со спросом). "
+                "Подожди минуту и нажми «🔄 Попробовать еще раз».")
+    if "429" in reason or "rate limit" in reason or "resource_exhausted" in reason:
+        return "❌ Слишком много запросов к ИИ. Подожди минуту и попробуй снова."
+    if "401" in reason:
+        return "❌ ИИ недоступен (неверный API-ключ). Проверь NARA_API."
+    if "402" in reason:
+        return "❌ Закончились кредиты на ИИ-роутере. Пополни баланс Nara."
+    if "400" in reason:
+        return (f"❌ ИИ-роутер отклонил запрос (модель {model}). "
+                "Попробуй ещё раз или позже.")
+    if "no_key" in reason or "google_no_key" in reason:
+        return "❌ ИИ недоступен (нет API-ключа). Установи NARA_API."
+    return "❌ ИИ не вернул ответ (возможно, сработала фильтрация). Попробуй ещё раз."
+
+
 def gemini_generate(prompt: str, max_tokens: int = 8192, raw: bool = False) -> str:
     """Синхронный вызов ИИ (NaraRouter — первично, Google — fallback).
     raw=True — не применять strip_markdown (для JSON-ответов)."""
@@ -279,7 +342,7 @@ def gemini_generate(prompt: str, max_tokens: int = 8192, raw: bool = False) -> s
         return "❌ ИИ недоступен (нет API-ключа). Установи NARA_API."
     text = _generate_text(prompt, max_tokens)
     if not text:
-        return "❌ ИИ не вернул ответ (возможно, сработала фильтрация)."
+        return _friendly_ai_error()
     if raw:
         print(f"[AI] Raw response ({len(text)} chars): {repr(text[:200])}")
         return text
