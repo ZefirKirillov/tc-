@@ -116,27 +116,46 @@ def _nara_chat(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None
             ]
         else:
             content = prompt
-        payload = {
+        def _post(payload: dict) -> tuple:
+            req = urllib.request.Request(
+                f"{NARA_BASE_URL}/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {key}",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                status = getattr(resp, "status", "?")
+                body = json.loads(resp.read().decode("utf-8"))
+            return status, body
+
+        base_payload = {
             "model": NARA_MODEL,
             "messages": [{"role": "user", "content": content}],
-            # NaraRouter под капотом маппит разные семейства моделей; часть
-            # принимает только max_completion_tokens вместо max_tokens.
-            # Шлём оба ключа — бэкенд возьмёт поддерживаемый, 400 не будет.
-            "max_tokens": max_tokens,
-            "max_completion_tokens": max_tokens,
         }
-        req = urllib.request.Request(
-            f"{NARA_BASE_URL}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {key}",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            status = getattr(resp, "status", "?")
-            body = json.loads(resp.read().decode("utf-8"))
+        status, body = None, None
+        last_400: Optional[Exception] = None
+        # Строгие OpenAI-совместимые серверы отклоняют неизвестные/дублирующие
+        # ключи 400-й, поэтому НЕ шлём max_tokens и max_completion_tokens
+        # разом. Пробуем по очереди: сначала max_tokens, при 400 — только
+        # max_completion_tokens.
+        for token_key in ("max_tokens", "max_completion_tokens"):
+            payload = dict(base_payload)
+            payload[token_key] = max_tokens
+            try:
+                status, body = _post(payload)
+                last_400 = None
+                break
+            except Exception as e:
+                code = getattr(e, "code", None) or getattr(e, "status", None)
+                if code == 400 and token_key == "max_tokens":
+                    last_400 = e
+                    print(f"[NARA] 400 с max_tokens — повторяю с "
+                          f"max_completion_tokens...")
+                    continue
+                raise
         elapsed = time.monotonic() - started
         # Какая модель реально ответила: доверяем полю "model" из ответа
         # роутера (может отличаться от запрошенной при remap на стороне Nara).
