@@ -1,4 +1,4 @@
-"""Персональные напоминания: AI-текст (Nara -> Google fallback) + шаблонный fallback.
+"""Персональные напоминания: rule-based шаблоны (без ИИ).
 
 Каденс (ответы пользователя):
 - обычные: каждые 6 часов
@@ -13,6 +13,7 @@
 - Тумблер вкл/выкл хранится в БД (переживает рестарт).
 - Шлём всем у кого есть открытые задачи / незакрытый день, бессрочно.
 """
+import random
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -225,53 +226,70 @@ def has_anything_to_say(ctx: dict) -> bool:
                 or ctx["workout_pending"] or ctx["diet_off"])
 
 
-# --- Text: AI with fallback chain, template fallback ---
+# --- Text: rule-based templates (no AI) ---
+
+# Несколько вариантов формулировок на сценарий, чтобы уведомления
+# не выглядели одинаково. Выбор — случайно, по одному шаблону
+# на каждый присутствующий блок контекста.
+
+_T_IMPORTANT = [
+    "🔥 Важно: {titles} — закрой сегодня, пока не сгорело!",
+    "🔥 Не забудь про главное: {titles}",
+    "🔥 {titles} ждут тебя — давай разберёмся с этим!",
+    "🔥 Приоритет дня: {titles}. Погнали?",
+]
+
+_T_TASKS = [
+    "📝 Открытые задачи ({n}): {titles}",
+    "📝 У тебя {n} незакрытых: {titles} — поехали по одной?",
+    "📝 Напоминаю про задачи ({n}): {titles}",
+]
+
+_T_WORKOUT = [
+    "🏋️ Сегодня тренировка — ещё не отмечена. Самое время!",
+    "🏋️ Тренировка ждёт! Отметь, когда сделаешь 💪",
+    "🏋️ Не пропусти тренировку сегодня!",
+]
+
+_T_DIET = [
+    "🍽 Калории: {info} — загляни в дневник питания",
+    "🍽 По питанию так: {info}",
+    "🍽 Проверь калории: {info}",
+]
+
+_T_RATINGS = [
+    "📒 Не оценено: {cats} — займёт минуту",
+    "📒 Загляни в рефлексию: {cats} ещё без оценки",
+    "📒 Осталось оценить: {cats}",
+]
+
+_T_FALLBACK = [
+    "Загляни в TrackCheck 👋",
+    "Эй, как дела? Загляни в TrackCheck 👋",
+    "Пара минут на себя — открой TrackCheck ✨",
+]
+
+
+def _pick(tpl: list, **kw) -> str:
+    return random.choice(tpl).format(**kw)
+
 
 def build_template_text(ctx: dict) -> str:
     parts = []
     if ctx["important_tasks"]:
         titles = ", ".join(f"«{t['title'][:30]}»" for t in ctx["important_tasks"][:3])
-        parts.append(f"🔥 Важно: {titles}")
+        parts.append(_pick(_T_IMPORTANT, titles=titles))
     elif ctx["open_tasks"]:
         n = len(ctx["open_tasks"])
         titles = ", ".join(f"«{t['title'][:30]}»" for t in ctx["open_tasks"][:2])
-        parts.append(f"📝 Задачи ({n}): {titles}")
+        parts.append(_pick(_T_TASKS, n=n, titles=titles))
     if ctx["workout_pending"]:
-        parts.append("🏋️ Сегодня тренировка — ещё не отмечена")
+        parts.append(random.choice(_T_WORKOUT))
     if ctx["diet_off"] and ctx["diet_info"]:
-        parts.append(f"🍽 Калории: {ctx['diet_info']}")
+        parts.append(_pick(_T_DIET, info=ctx["diet_info"]))
     if ctx["missing_ratings"]:
-        parts.append("📒 Не оценено: " + ", ".join(ctx["missing_ratings"]))
-    return " • ".join(parts)[:400] if parts else "Загляни в TrackCheck 👋"
-
-
-def build_ai_text(ctx: dict, user_id: int = 0) -> tuple[str, bool]:
-    """(текст, это_ai). AI через общий fallback Nara->Google; при неудаче — шаблон."""
-    from trackcheck.services import ai_service
-    tasks_bit = ("нет открытых задач" if not ctx["open_tasks"]
-                 else "; ".join(f"{'🔥 ' if t.get('is_priority') else ''}{t['title'][:40]}"
-                                + (f" (дедлайн {t['deadline']})" if t.get("deadline") else "")
-                                for t in ctx["open_tasks"][:5]))
-    prompt = (
-        f"Ты — дружелюбный напоминатель трекера привычек. Пользователь: {ctx['name']}. "
-        f"Открытые задачи: {tasks_bit}. "
-        f"Не оценённые категории сегодня: {', '.join(ctx['missing_ratings']) or 'всё оценено'}. "
-        f"Тренировка сегодня не выполнена: {ctx['workout_pending']}. "
-        + (f"Калории: {ctx['diet_info']}. " if ctx["diet_info"] else "") +
-        "Напиши короткое напоминание (1-2 предложения, по-русски, с 1-2 эмодзи). "
-        "Сначала самое важное. Без воды, без markdown."
-    )
-    try:
-        text = ai_service.gemini_generate(prompt, max_tokens=256)
-        if text and not text.startswith("❌"):
-            return text.strip()[:400], True
-    except Exception as e:
-        import traceback
-        print(f"[NOTIFY] AI error user={user_id} (falling back to template): {e}")
-        traceback.print_exc()
-    print(f"[NOTIFY] AI unavailable user={user_id} — "
-          f"template fallback used (last_ai={ai_service.LAST_AI_CALL})")
-    return build_template_text(ctx), False
+        parts.append(_pick(_T_RATINGS, cats=", ".join(ctx["missing_ratings"])))
+    return " • ".join(parts)[:400] if parts else random.choice(_T_FALLBACK)
 
 
 # --- Keyboard depends on content ---
@@ -298,7 +316,7 @@ def notify_keyboard(ctx: dict):
 async def send_notification(bot, user_id: int, kind: str) -> None:
     """kind: 'hourly' | 'usual'. Проверяет тумблер/мьют, собирает контекст,
     пропускает цикл если сказать нечего (для usual) или не важное (для hourly)."""
-    from trackcheck.utils.concurrency import run_db, run_in_thread
+    from trackcheck.utils.concurrency import run_db
     enabled = await run_db(is_notify_enabled, user_id)
     muted = await run_db(is_muted, user_id)
     if not enabled or muted:
@@ -311,9 +329,7 @@ async def send_notification(bot, user_id: int, kind: str) -> None:
         return
     # для usual пропускаем если всё важное уже покрыто часовым? нет — шлём,
     # слот один, замена произойдёт ниже.
-    # AI — синхронный (сеть), поэтому из event loop только через run_in_thread,
-    # иначе весь бот виснет на время запроса к Nara/Google.
-    text, via_ai = await run_in_thread(build_ai_text, ctx, user_id)
+    text = build_template_text(ctx)
     prefix = "🔥 " if important else "🔔 "
     try:
         old_id = await run_db(get_last_notify_msg_id, user_id)
@@ -326,7 +342,7 @@ async def send_notification(bot, user_id: int, kind: str) -> None:
                                      reply_markup=notify_keyboard(ctx))
         await run_db(set_last_notify_msg_id, user_id, msg.message_id)
         log_action(f"NOTIFY_{kind.upper()}", user_id,
-                   f"{'ai' if via_ai else 'template'} important={important}")
+                   f"template important={important}")
     except Exception as e:
         print(f"[NOTIFY] send fail user={user_id}: {e}")
 

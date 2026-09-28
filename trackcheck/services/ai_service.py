@@ -886,21 +886,6 @@ def gemini_monthly_review(plan: dict, recent_sessions: list) -> Optional[dict]:
 
 
 
-def generate_proactive_ai_message(user_id: int) -> str:
-    stats = get_user_stats_for_ai(user_id)
-    name = get_user_name(user_id)
-    yesterday = stats['yesterday']
-    today = stats['today']
-
-    prompt = f"""Пользователь {name}. Вчерашние данные: {yesterday}. Сегодня уже оценил: {today}.
-    Составь короткое персональное приветствие-вопрос (макс 2 предложения) на основе вчерашних данных.
-    Если вчера что-то было плохо (оценка <=4), спроси как сегодня.
-    Если всё было хорошо, похвали и спроси что оценим сегодня.
-    Обращайся по имени."""
-    return gemini_generate(prompt, max_tokens=1024)
-
-
-
 def analyze_low_rating(user_id: int, category: str, rating: int) -> str:
     name = get_user_name(user_id)
     stats = get_user_stats_for_ai(user_id)
