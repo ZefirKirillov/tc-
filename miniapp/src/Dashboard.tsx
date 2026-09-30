@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { api } from './api'
+import { api, haptic, notifyOk } from './api'
 import { s } from './styles'
+import { useBanner } from './ui'
 
 const CATS: Array<[string, string]> = [
   ['сон', '😴 Сон'],
@@ -15,7 +16,8 @@ function bar(rating: number) {
   return '▓'.repeat(filled) + '░'.repeat(5 - filled)
 }
 
-export default function Dashboard({ me, setMe, onErr }: { me: any; setMe: any; onErr: (e: string) => void }) {
+export default function Dashboard({ me, setMe }: { me: any; setMe: any }) {
+  const b = useBanner()
   const [pending, setPending] = useState<string | null>(null)
 
   async function rate(cat: string, val: number) {
@@ -23,8 +25,13 @@ export default function Dashboard({ me, setMe, onErr }: { me: any; setMe: any; o
     try {
       const res = await api.saveRating(cat, val)
       setMe((m: any) => ({ ...m, today_ratings: res.ratings }))
-    } catch (e: any) {
-      onErr(String(e.message ?? e))
+      haptic()
+      if (res.spark_awarded) {
+        notifyOk()
+        b.setOk('✨ Искра зажжена! Все категории заполнены 🌌')
+      }
+    } catch (e) {
+      b.setErr(e)
     } finally {
       setPending(null)
     }
@@ -32,7 +39,8 @@ export default function Dashboard({ me, setMe, onErr }: { me: any; setMe: any; o
 
   return (
     <div>
-      <h2 style={s.h}>TrackCheck {me.rank?.emoji}</h2>
+      <h2 style={s.h}>🌌 TrackCheck {me.rank?.emoji}</h2>
+      {b.BannerEl}
       <p style={s.sub}>{me.rank?.name} · 🔥 {me.streak} дней · ✨ {me.rank?.total_sparks}/{me.rank?.next_total}</p>
       <p style={s.sub}>🏋️ {me.workout?.current_count}/{me.workout?.monthly_goal} · 🍽 {Math.round(me.diet?.today_calories ?? 0)}/{Math.round(me.diet?.daily_goal ?? 0)}</p>
       {CATS.map(([key, label]) => {

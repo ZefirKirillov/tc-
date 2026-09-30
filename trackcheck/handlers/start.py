@@ -133,6 +133,22 @@ async def handle_timezone_choice(callback: CallbackQuery, bot: Bot):
 
 
 
+@router.message(Command("app"))
+async def cmd_app(message: Message, bot: Bot):
+    """Прямая ссылка на Mini App (дублирует кнопку меню)."""
+    from trackcheck.config import MINIAPP_URL
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+    try:
+        await message.delete()
+    except:
+        pass
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Открыть TrackCheck", web_app=WebAppInfo(url=MINIAPP_URL))]
+    ])
+    msg = await message.answer("🚀 Мини-приложение TrackCheck — вся статистика, тренировки и задачи в одном окне:", reply_markup=kb)
+    user_temp_messages.setdefault(message.from_user.id, {})['app_link'] = msg.message_id
+
+
 @router.message(Command("timezone"))
 async def cmd_timezone(message: Message, bot: Bot):
     try:

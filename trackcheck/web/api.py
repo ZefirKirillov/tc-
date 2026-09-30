@@ -15,6 +15,37 @@ def _unauthorized():
     return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
 
 
+# Russian user-facing error texts for API error codes (frontend falls back to these).
+RU_ERRORS = {
+    "unauthorized": "Открой через Telegram — кнопка Mini App.",
+    "bad_json": "Не получилось прочитать запрос. Попробуй ещё раз.",
+    "bad_params": "Некорректные данные. Проверь ввод.",
+    "bad_rating": "Оценка должна быть от 1 до 10.",
+    "bad_title": "Название задачи не может быть пустым.",
+    "bad_deadline": "Дедлайн — дата в формате ГГГГ-ММ-ДД.",
+    "bad_repeat": "Дни повтора: числа 0–6 (Пн–Вс).",
+    "bad_id": "Некорректный ID.",
+    "bad_calories": "Калории — число больше нуля.",
+    "bad_session": "Тренировка не найдена. Начни заново.",
+    "bad_action": "Неизвестное действие.",
+    "bad_exercise": "Не получилось распознать упражнение.",
+    "bad_plan": "План пустой или повреждён.",
+    "bad_days": "Дней в неделю: от 1 до 7.",
+    "too_short": "Напиши чуть подробнее (от 3 символов).",
+    "no_workout_today": "Сегодня отдых — тренировки нет 🌙",
+    "ai_failed": "✨ Космос молчит — ИИ не ответил. Попробуй ещё раз.",
+    "photo_too_big": "Фото слишком большое (макс 5 МБ).",
+    "photo_bad": "Не получилось прочитать фото.",
+    "bad_weight": "Вес: число от 20 до 400 кг.",
+    "bad_fat": "Процент жира: число от 1 до 70.",
+    "bad_text": "Текст слишком короткий или пустой.",
+}
+
+
+def _err(code: str, status: int = 400):
+    return web.json_response({"ok": False, "error": code, "message": RU_ERRORS.get(code, code)}, status=status)
+
+
 async def _current_user(request: web.Request):
     init_data = request.headers.get("X-Telegram-Init-Data", "")
     if not init_data and request.method in ("GET", "DELETE"):
@@ -553,6 +584,278 @@ async def api_ai_advice(request: web.Request):
 
 
 @require_user
+async def api_body_get(request: web.Request):
+    """Weight + body-fat: last values for the Diet tab."""
+    from trackcheck.database.repositories import get_last_weight
+    from trackcheck.database.connection import db
+    user_id = request["tg_user"]["id"]
+
+    def _load():
+        weight = get_last_weight(user_id)
+        cur = db.execute(
+            "SELECT body_fat FROM body_fat_log WHERE user_id = ? ORDER BY date DESC LIMIT 1",
+            (user_id,))
+        row = cur.fetchone()
+        return {"weight": weight, "body_fat": row[0] if row else None}
+
+    data = await run_db(_load)
+    return web.json_response({"ok": True, "data": data})
+
+
+@require_user
+async def api_body_post(request: web.Request):
+    """Log weight and/or body fat: {weight?, body_fat?}."""
+    from trackcheck.database.repositories import save_weight_log, save_body_fat
+    user_id = request["tg_user"]["id"]
+    try:
+        body = await request.json()
+    except Exception:
+        return _err("bad_json")
+    weight = body.get("weight")
+    fat = body.get("body_fat")
+    if weight is None and fat is None:
+        return _err("bad_params")
+    try:
+        weight = float(weight) if weight is not None else None
+        fat = float(fat) if fat is not None else None
+    except (TypeError, ValueError):
+        return _err("bad_params")
+    if weight is not None and not (20 <= weight <= 400):
+        return _err("bad_weight")
+    if fat is not None and not (1 <= fat <= 70):
+        return _err("bad_fat")
+
+    def _save():
+        if weight is not None:
+            save_weight_log(user_id, weight)
+        if fat is not None:
+            save_body_fat(user_id, fat)
+        return {"saved": True}
+
+    result = await run_db(_save)
+    return web.json_response({"ok": True, "data": result})
+
+
+@require_user
+async def api_diet_photo(request: web.Request):
+    """Analyze food photo → {description, calories}. Does NOT log — client confirms first."""
+    import io
+    import re
+    from trackcheck.utils.concurrency import run_in_thread
+    from trackcheck.services.ai_service import analyze_food_photo
+    try:
+        post = await request.post()
+    except Exception:
+        return _err("bad_json")
+    field = post.get("photo")
+    if field is None:
+        return _err("photo_bad")
+    try:
+        image_bytes = field.file.read() if hasattr(field, "file") else bytes(field)
+    except Exception:
+        return _err("photo_bad")
+    if not image_bytes:
+        return _err("photo_bad")
+    if len(image_bytes) > 5 * 1024 * 1024:
+        return _err("photo_too_big")
+    # Normalize to PNG (same as bot food.py) to keep model input stable.
+    try:
+        from PIL import Image
+        image = Image.open(io.BytesIO(image_bytes))
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        image_bytes = buf.getvalue()
+    except Exception:
+        pass  # send raw bytes; model layer will fail gracefully → ai_failed
+    prompt = (
+        "Посмотри на фото еды и оцени калорийность.\n\n"
+        "Ответь строго в формате: [название блюда] [число ккал]\n"
+        "Название — 1-4 слова на русском. Число — только целые ккал без единиц.\n\n"
+        "Правила оценки:\n"
+        "- Считай реальную порцию на фото, не занижай\n"
+        "- Учитывай видимые соусы, масло, хлеб рядом\n"
+        "- Если несколько блюд — суммируй всё\n\n"
+        "Примеры правильных ответов:\n"
+        "гречка с курицей 480\nпаста карбонара 650\nсалат цезарь 520"
+    )
+    text = await run_in_thread(analyze_food_photo, image_bytes, prompt)
+    if text is None:
+        return _err("ai_failed", 502)
+    description, calories = "Блюдо на фото", None
+    nums = re.findall(r"\b(\d{2,5})\b", text)
+    valid = [float(n) for n in nums if 50 <= float(n) <= 9999]
+    if valid:
+        calories = valid[-1]
+    match = re.search(r"^([^0-9]+?)(?:\s*\d|$)", text)
+    if match:
+        desc = match.group(1).strip(" .,;:-")
+        if 2 <= len(desc) <= 50:
+            description = desc
+    if calories is None or not (0 < calories <= 5000):
+        return web.json_response({"ok": True, "data": {
+            "description": description, "calories": None, "needs_manual": True, "raw": text[:200]}})
+    return web.json_response({"ok": True, "data": {
+        "description": description, "calories": int(calories), "needs_manual": False}})
+
+
+@require_user
+async def api_workout_parse_plan(request: web.Request):
+    """Parse user-pasted plan text via Gemini → plan JSON for review (no save)."""
+    from trackcheck.utils.concurrency import run_in_thread
+    from trackcheck.services.ai_service import gemini_parse_manual_plan, _fallback_parse_plan
+    try:
+        body = await request.json()
+    except Exception:
+        return _err("bad_json")
+    raw_text = (body.get("text") or "").strip()
+    if len(raw_text) < 10:
+        return _err("bad_text")
+    if len(raw_text) > 20000:
+        raw_text = raw_text[:20000]
+    plan = await run_in_thread(gemini_parse_manual_plan, raw_text)
+    if not plan:
+        plan = await run_in_thread(_fallback_parse_plan, raw_text)
+    if not plan:
+        return _err("ai_failed", 502)
+    return web.json_response({"ok": True, "data": {"plan": plan}})
+
+
+@require_user
+async def api_workout_log_text(request: web.Request):
+    """Log exercise from free text: {session_id, exercise, text} → Gemini parses result."""
+    import json as _json
+    from trackcheck.database.connection import db
+    from trackcheck.utils.concurrency import run_in_thread
+    from trackcheck.services.ai_service import gemini_parse_exercise_result
+    user_id = request["tg_user"]["id"]
+    try:
+        body = await request.json()
+    except Exception:
+        return _err("bad_json")
+    try:
+        session_id = int(body.get("session_id", 0))
+    except (TypeError, ValueError):
+        return _err("bad_session")
+    ex = body.get("exercise") or {}
+    ex_name = (ex.get("exercise") or ex.get("name") or "").strip()[:200]
+    raw_text = (body.get("text") or "").strip()[:500]
+    if not ex_name:
+        return _err("bad_exercise")
+    if len(raw_text) < 1:
+        return _err("bad_text")
+
+    def _check():
+        cur = db.execute(
+            "SELECT id FROM ai_workout_sessions WHERE id = ? AND user_id = ?",
+            (session_id, user_id))
+        return bool(cur.fetchone())
+
+    if not await run_db(_check):
+        return _err("bad_session", 404)
+    result = await run_in_thread(gemini_parse_exercise_result, ex, raw_text)
+
+    def _log():
+        db.execute(
+            "INSERT INTO ai_exercise_logs"
+            " (session_id, user_id, exercise_name, planned_json, raw_input, result_json, status)"
+            " VALUES (?, ?, ?, ?, ?, ?, 'done')",
+            (session_id, user_id, ex_name, _json.dumps(ex, ensure_ascii=False),
+             raw_text, _json.dumps(result, ensure_ascii=False)))
+        db.commit()
+        return result
+
+    saved = await run_db(_log)
+    return web.json_response({"ok": True, "data": {"result": saved}})
+
+
+@require_user
+async def api_workout_review(request: web.Request):
+    """Monthly AI review: propose exercise swaps, or {no_changes_needed: true}."""
+    from trackcheck.database.connection import db
+    from trackcheck.database.repositories import get_ai_plan, get_session_exercise_logs
+    from trackcheck.utils.concurrency import run_in_thread
+    from trackcheck.services.ai_service import gemini_monthly_review
+    import json as _json
+    user_id = request["tg_user"]["id"]
+
+    def _load():
+        plan_data = get_ai_plan(user_id)
+        if not plan_data:
+            return None
+        cur = db.execute(
+            "SELECT id, date, session_key, plan_json FROM ai_workout_sessions"
+            " WHERE user_id = ? AND status = 'done' ORDER BY date DESC LIMIT 10",
+            (user_id,))
+        sessions = []
+        for row in cur.fetchall():
+            sid = row[0]
+            sessions.append({
+                "date": row[1], "session_key": row[2],
+                "plan": _json.loads(row[3]),
+                "logs": [{"exercise": l["exercise_name"], "result": l.get("result"),
+                          "status": l["status"]}
+                         for l in get_session_exercise_logs(sid)],
+            })
+        return plan_data, sessions
+
+    loaded = await run_db(_load)
+    if not loaded:
+        return _err("bad_plan", 404)
+    plan_data, sessions = loaded
+    review = await run_in_thread(gemini_monthly_review, plan_data["plan"], sessions)
+    if review is None:
+        return _err("ai_failed", 502)
+    return web.json_response({"ok": True, "data": review})
+
+
+@require_user
+async def api_workout_apply_review(request: web.Request):
+    """Apply accepted monthly-review swaps: {accepted: [{day, week, old_exercise, new_exercise}]}."""
+    from trackcheck.database.repositories import get_ai_plan, update_plan_json
+    user_id = request["tg_user"]["id"]
+    try:
+        body = await request.json()
+    except Exception:
+        return _err("bad_json")
+    accepted = body.get("accepted")
+    if not isinstance(accepted, list) or not accepted:
+        return _err("bad_params")
+
+    def _apply():
+        plan_data = get_ai_plan(user_id)
+        if not plan_data:
+            return None
+        plan = plan_data["plan"]
+        applied = 0
+        for ch in accepted:
+            if not isinstance(ch, dict):
+                continue
+            week, day = ch.get("week"), ch.get("day")
+            old, new = ch.get("old_exercise"), ch.get("new_exercise")
+            if not all(isinstance(x, str) for x in (week, day, old, new)):
+                continue
+            lst = (plan.get(week) or {}).get(day)
+            if not isinstance(lst, list):
+                continue
+            for ex in lst:
+                nm = ex.get("exercise", ex.get("name"))
+                if nm == old:
+                    ex["exercise"] = new
+                    if "name" in ex:
+                        ex["name"] = new
+                    applied += 1
+                    break
+        if applied:
+            update_plan_json(user_id, plan)
+        return {"applied": applied}
+
+    result = await run_db(_apply)
+    if result is None:
+        return _err("bad_plan", 404)
+    return web.json_response({"ok": True, "data": result})
+
+
+@require_user
 async def api_ai_last(request: web.Request):
     from trackcheck.database.repositories import get_last_ai_answer
     user_id = request["tg_user"]["id"]
@@ -609,13 +912,20 @@ def create_api_app() -> web.Application:
     app.router.add_delete("/api/tasks/{task_id}", api_task_delete)
     app.router.add_get("/api/diet", api_diet_get)
     app.router.add_post("/api/diet/log", api_diet_log_post)
+    app.router.add_post("/api/diet/photo", api_diet_photo)
+    app.router.add_get("/api/body", api_body_get)
+    app.router.add_post("/api/body", api_body_post)
     app.router.add_get("/api/stats", api_stats_get)
     app.router.add_get("/api/workout", api_workout_get)
     app.router.add_post("/api/workout/start", api_workout_start)
     app.router.add_post("/api/workout/log", api_workout_log_ex)
+    app.router.add_post("/api/workout/log-text", api_workout_log_text)
     app.router.add_post("/api/workout/finish", api_workout_finish)
     app.router.add_post("/api/workout/generate", api_workout_generate)
     app.router.add_post("/api/workout/plan", api_workout_save_plan)
+    app.router.add_post("/api/workout/parse-plan", api_workout_parse_plan)
+    app.router.add_post("/api/workout/review", api_workout_review)
+    app.router.add_post("/api/workout/apply-review", api_workout_apply_review)
     app.router.add_get("/api/workout/history", api_workout_history)
     app.router.add_post("/api/ai/ask", api_ai_ask)
     app.router.add_post("/api/ai/advice", api_ai_advice)

@@ -1,8 +1,14 @@
 from typing import Optional
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
+from trackcheck.config import MINIAPP_URL
 from trackcheck.utils.formatting import days_left_str
+
+
+def open_app_button(text: str = "🚀 Открыть приложение") -> InlineKeyboardButton:
+    """Deep-link button into the Mini App. Used across section menus."""
+    return InlineKeyboardButton(text=text, web_app=WebAppInfo(url=MINIAPP_URL))
 
 
 def main_menu_keyboard():
@@ -13,7 +19,8 @@ def main_menu_keyboard():
         [InlineKeyboardButton(text="🏋️ Тренировки", callback_data="menu_workouts"),
          InlineKeyboardButton(text="Check AI", callback_data="menu_ai")],
         [InlineKeyboardButton(text="🍽 Диета", callback_data="menu_diet"),
-         InlineKeyboardButton(text="📝 Задачи", callback_data="menu_tasks")]
+         InlineKeyboardButton(text="📝 Задачи", callback_data="menu_tasks")],
+        [open_app_button()],
     ])
 
 

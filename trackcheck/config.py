@@ -8,6 +8,11 @@ except ImportError:
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+# Public HTTPS base of this Render service, e.g. https://trackcheckv2.onrender.com
+# Used for web_app buttons. Override with MINIAPP_BASE_URL env if different.
+MINIAPP_BASE_URL = os.getenv("MINIAPP_BASE_URL", "https://trackcheckv2.onrender.com")
+MINIAPP_URL = f"{MINIAPP_BASE_URL.rstrip('/')}/app"
+
 
 
 NARA_API_KEY = os.getenv("NARA_API") or os.getenv("NARA_API_KEY")
