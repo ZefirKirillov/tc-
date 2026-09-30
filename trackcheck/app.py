@@ -9,7 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from trackcheck import runtime
 from trackcheck.config import BOT_TOKEN, RUSSIAN_TIMEZONES
 from trackcheck.database.connection import db, init_db
-from trackcheck.health import start_health_server
+from trackcheck.web.server import start_web_server
 from trackcheck.utils.logging import (log_db_persistence_diagnostics,
                                        log_ratings_ai_diagnostics)
 from trackcheck.services.tracker_service import finalize_daily_ratings_for_timezone
@@ -61,7 +61,7 @@ async def main():
     runtime.scheduler = scheduler
     print("[BOOT] Планировщик запущен")
 
-    health_runner = await start_health_server()
+    health_runner = await start_web_server()
 
     await bot.delete_webhook(drop_pending_updates=True)
     print("[BOOT] Webhook удалён")
