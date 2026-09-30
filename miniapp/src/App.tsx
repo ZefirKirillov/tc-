@@ -16,8 +16,8 @@ const TABS: Array<[Tab, string, string]> = [
   ['workout', '🏋️', 'Тренировки'],
   ['tasks', '📝', 'Задачи'],
   ['diet', '🍽', 'Диета'],
-  ['ai', '🤖', 'Оракул'],
-  ['stats', '📊', 'Статы'],
+  ['ai', '🤖', 'CheckAI'],
+  ['stats', '📊', 'Статистика'],
 ]
 
 export default function App() {
@@ -38,16 +38,16 @@ export default function App() {
     return (
       <div style={s.page}>
         <style>{'@keyframes tc-shimmer { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }'}</style>
-        <h2 style={s.h}>🌌 TrackCheck</h2>
+        <h2 style={s.h}>TrackCheck</h2>
         <p style={s.err}>⚠️ {err}</p>
-        <p style={s.hint}>Открой через Telegram — кнопка Mini App 🚀</p>
+        <p style={s.hint}>Открой через Telegram (кнопка Mini App).</p>
       </div>
     )
   if (!me)
     return (
       <div style={s.page}>
         <style>{'@keyframes tc-shimmer { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }'}</style>
-        <h2 style={s.h}>🌌 TrackCheck</h2>
+        <h2 style={s.h}>TrackCheck</h2>
         <Skeletons />
       </div>
     )
@@ -58,7 +58,7 @@ export default function App() {
     <div style={s.page}>
       <style>{'@keyframes tc-shimmer { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }'}</style>
       {err && <p style={s.err} onClick={() => setErr('')}>{err}</p>}
-      <div style={{ ...s.sub, marginBottom: 4 }}>✨ {active?.[2]} · {me.name}</div>
+      <div style={{ ...s.sub, marginBottom: 4 }}>{active?.[2]} · {me.name}</div>
       {tab === 'main' && <Dashboard me={me} setMe={setMe} />}
       {tab === 'workout' && <Workout />}
       {tab === 'tasks' && <Tasks />}

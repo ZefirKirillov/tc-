@@ -66,7 +66,7 @@ export default function Workout() {
     try {
       const r = await api.workoutLogText(sessionId, exs[idx], txt.trim())
       haptic()
-      b.setOk(`Записано: ${r.result?.sets_done ?? ''}×${r.result?.reps_done ?? ''}${r.result?.weight_done ? ` @ ${r.result.weight_done}` : ''} ✨`)
+      b.setOk(`Записано: ${r.result?.sets_done ?? ''}×${r.result?.reps_done ?? ''}${r.result?.weight_done ? ` @ ${r.result.weight_done}` : ''}`)
       setTxt('')
       setIdx(idx + 1)
       setData(await api.workout())
@@ -80,7 +80,7 @@ export default function Workout() {
     try {
       const r = await api.workoutFinish(sessionId)
       notifyOk()
-      b.setOk(`Миссия выполнена! 🛸 ✔${r.done} ⏭${r.skipped}${r.spark_awarded ? ' · ✨ +искра' : ''}${r.rank_up ? ' · Ранг повышен!' : ''}`)
+      b.setOk(`Готово! ✅ Выполнено: ${r.done}, пропущено: ${r.skipped}${r.spark_awarded ? ' · ✨ +искра' : ''}${r.rank_up ? ' · Ранг повышен!' : ''}`)
       setSessionId(null); setIdx(0)
       await load()
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
@@ -118,7 +118,7 @@ export default function Workout() {
       await api.workoutSavePlan(wiz.plan, wiz.manual ? 'manual' : 'ai', wiz.goal, wiz.level, wiz.days)
       setWiz(null)
       notifyOk()
-      b.setOk('План сохранён в звёздную карту 🌌')
+      b.setOk('План сохранён!')
       await load()
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
@@ -135,7 +135,7 @@ export default function Workout() {
   async function applyReview() {
     if (!review?.changes) return
     const acc = review.changes.filter((_: any, i: number) => accepted.has(i))
-    if (!acc.length) { b.setErr('Выбери хотя бы одну замену 🌠'); return }
+    if (!acc.length) { b.setErr('Выбери хотя бы одну замену.'); return }
     setBusy(true)
     try {
       const r = await api.workoutApplyReview(acc)
@@ -154,20 +154,20 @@ export default function Workout() {
     const set = (p: Partial<Wiz>) => setWiz({ ...w, ...p })
     return (
       <div>
-        <h2 style={s.h}>🌌 Карта тренировок</h2>
+        <h2 style={s.h}>🏋️ План тренировок</h2>
         {b.BannerEl}
         {w.step === 0 && (
           <div style={s.card}>
             <p>Плана пока нет. Создать с помощью ИИ или вставить свой?</p>
             <div style={s.row}>
-              <button onClick={() => set({ step: 1 })} style={s.primary}>✨ С ИИ</button>
+              <button onClick={() => set({ step: 1 })} style={s.primary}>С ИИ</button>
               <button onClick={() => set({ step: 4 })} style={s.btnSm}>📝 Свой текст</button>
             </div>
           </div>
         )}
         {w.step === 1 && (
           <div style={s.card}>
-            <p><b>Шаг 1/3:</b> цель полёта?</p>
+            <p><b>Шаг 1/3:</b> цель?</p>
             <div style={s.btns}>{['Похудение', 'Набор массы', 'Сила', 'Выносливость'].map((g) => (
               <button key={g} onClick={() => { set({ goal: g, step: 2 }); haptic() }}
                 style={w.goal === g ? s.btnActive : s.btnSm}>{g}</button>
@@ -192,7 +192,7 @@ export default function Workout() {
             <input value={w.notes} onChange={(e) => set({ notes: e.target.value })}
               placeholder="Пожелания (травмы, инвентарь…)" style={{ ...s.input, marginTop: 8 }} maxLength={500} />
             <div style={{ marginTop: 8 }}><button onClick={genPlan} disabled={busy} style={s.primary}>
-              {busy ? '🌌 Консультируюсь со звёздами…' : 'Сгенерировать ✨'}</button></div>
+              {busy ? 'Генерация…' : 'Сгенерировать ✨'}</button></div>
           </div>
         )}
         {w.step === 4 && (
@@ -203,7 +203,7 @@ export default function Workout() {
             <div style={{ ...s.row, marginTop: 8, marginBottom: 0 }}>
               <button onClick={() => set({ step: 0 })} style={s.btnSm}>↩ Назад</button>
               <button onClick={parseManual} disabled={busy} style={s.primary}>
-                {busy ? '🌌 Разбираю…' : 'Разобрать ✨'}</button>
+                {busy ? 'Разбираю…' : 'Разобрать'}</button>
             </div>
           </div>
         )}
@@ -227,14 +227,14 @@ export default function Workout() {
     <div>
       <h2 style={s.h}>🏋️ Тренировка</h2>
       {b.BannerEl}
-      <p style={s.sub}>🪐 Неделя: {data.week_progress?.done}/{data.week_progress?.goal}
+      <p style={s.sub}>Неделя: {data.week_progress?.done}/{data.week_progress?.goal}
         {data.next ? ` · След.: ${data.next.day}, ${data.next.date}` : ''}</p>
-      {data.is_rest_day && <div style={s.card}><p>🌙 Сегодня отдых — звёзды восстанавливаются. {data.next ? `Следующая: ${data.next.day}, ${data.next.date}` : ''}</p></div>}
+      {data.is_rest_day && <div style={s.card}><p>😴 Сегодня отдых. {data.next ? `Следующая: ${data.next.day}, ${data.next.date}` : ''}</p></div>}
       {!data.is_rest_day && !sessionId && (
         <div style={s.card}>
           <p>Сегодня: {exs.length} упр.</p>
           {exs.map((e, i) => <div key={i} style={s.sub}>{i + 1}. {exName(e)} {e.sets}×{e.reps}{e.weight ? ` @ ${e.weight}кг` : ''}</div>)}
-          <div style={{ marginTop: 8 }}><button onClick={start} disabled={busy} style={s.primary}>▶ Начать миссию</button></div>
+          <div style={{ marginTop: 8 }}><button onClick={start} disabled={busy} style={s.primary}>▶ Начать</button></div>
         </div>
       )}
       {!data.is_rest_day && sessionId && idx < exs.length && (
@@ -250,7 +250,7 @@ export default function Workout() {
             placeholder='Или напиши: "жим 80х5, тяжело"' style={s.input} maxLength={500} />
           <div style={{ marginTop: 8 }}>
             <button onClick={logText} disabled={busy || !txt.trim()} style={s.btnSm}>
-              {busy ? '🌌…' : '✍️ Записать текстом'}
+              {busy ? '…' : '✍️ Записать текстом'}
             </button>
           </div>
         </div>
@@ -269,8 +269,8 @@ export default function Workout() {
       <div style={{ marginTop: 12 }}>
         <button onClick={showHistory} style={s.btnSm}>{showHist ? 'Скрыть историю' : '📜 История'}</button>
         {' '}
-        <button onClick={review ? () => setReview(null) : loadReview} style={s.btnSm} disabled={reviewBusy}>
-          {reviewBusy ? '🌌 Анализ…' : review ? 'Скрыть ревью' : '🔄 Месячное ревью'}
+        <button onClick={() => (review ? setReview(null) : loadReview())} style={s.btnSm} disabled={reviewBusy}>
+          {reviewBusy ? 'Анализ…' : review ? 'Скрыть ревью' : '🔄 Месячное ревью'}
         </button>
         {showHist && hist.map((h, i) => (
           <div key={i} style={s.card}><div style={s.row}>
@@ -281,7 +281,7 @@ export default function Workout() {
         {review && (
           <div style={s.card}>
             {review.no_changes_needed || !(review.changes ?? []).length
-              ? <p>✨ Космос доволен — менять ничего не нужно!</p>
+              ? <p>Менять ничего не нужно — план в порядке!</p>
               : <>
                 <p><b>ИИ предлагает замены:</b> выбери какие применить:</p>
                 {review.changes.map((ch: any, i: number) => (

@@ -22,7 +22,7 @@ export default function Tasks() {
   useEffect(() => { load() }, [])
 
   async function add() {
-    if (!title.trim()) { b.setErr('Назови задачу, даже коротко 🌠'); return }
+    if (!title.trim()) { b.setErr('Введи название задачи.'); return }
     try {
       await api.addTask(title.trim(), prio, deadline || null, repeat.size ? [...repeat] : null)
       setTitle(''); setPrio(false); setDeadline(''); setRepeat(new Set())
@@ -53,10 +53,10 @@ export default function Tasks() {
 
   return (
     <div>
-      <h2 style={s.h}>📝 Орбита задач</h2>
+      <h2 style={s.h}>📝 Задачи</h2>
       {b.BannerEl}
       <div style={s.card}>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Новая миссия…"
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Новая задача…"
           style={s.input} maxLength={200} />
         <div style={{ ...s.row, marginTop: 8 }}>
           <label><input type="checkbox" checked={prio} onChange={(e) => setPrio(e.target.checked)} /> 🔥 Приоритет</label>
@@ -68,9 +68,9 @@ export default function Tasks() {
             <button key={i} onClick={() => toggleDay(i)} style={repeat.has(i) ? s.btnActive : s.btn}>{w}</button>
           ))}</div>
         </div>
-        <div style={{ marginTop: 8 }}><button onClick={add} style={s.primary}>🚀 Запустить</button></div>
+        <div style={{ marginTop: 8 }}><button onClick={add} style={s.primary}>Добавить</button></div>
       </div>
-      {tasks.length === 0 && <p style={s.sub}>Орбита пуста. Запусти первую миссию! 🛸</p>}
+      {tasks.length === 0 && <p style={s.sub}>Задач пока нет. Добавь первую!</p>}
       {tasks.map((t) => (
         <div key={t.id} style={{ ...s.card, opacity: t.is_done ? 0.55 : 1 }}>
           <div style={s.row}>
@@ -90,7 +90,7 @@ export default function Tasks() {
         </div>
       ))}
       {delId != null && (
-        <Confirm title="Удалить задачу?" body="Она исчезнет из орбиты навсегда 🕳️"
+        <Confirm title="Удалить задачу?" body="Это действие нельзя отменить."
           okLabel="🗑 Удалить" onOk={del} onCancel={() => setDelId(null)} />
       )}
     </div>

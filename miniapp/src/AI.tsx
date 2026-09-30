@@ -30,17 +30,17 @@ export default function AI() {
 
   return (
     <div>
-      <h2 style={s.h}>🤖 Оракул nebulы</h2>
+      <h2 style={s.h}>🤖 CheckAI</h2>
       {b.BannerEl}
       <button onClick={() => ask(true)} disabled={busy} style={s.primary}>
-        {busy ? '🌌 Совещаюсь со звёздами…' : '💡 Дай совет'}
+        {busy ? 'Думаю…' : '💡 Дай совет'}
       </button>
       <div style={s.card}>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Спроси у космоса…"
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Спроси что-нибудь…"
           style={s.input} maxLength={2000} onKeyDown={(e) => { if (e.key === 'Enter') ask() }} />
         <div style={{ marginTop: 8, marginBottom: 0 }}>
           <button onClick={() => ask()} disabled={busy || q.trim().length < 3} style={s.primary}>
-            {busy ? '🌌…' : 'Спросить ✨'}
+            {busy ? 'Думаю…' : 'Спросить'}
           </button>
         </div>
       </div>

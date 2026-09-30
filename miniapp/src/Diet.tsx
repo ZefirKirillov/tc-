@@ -29,12 +29,12 @@ export default function Diet() {
 
   async function log() {
     const calories = parseFloat(cal.replace(',', '.'))
-    if (!desc.trim() || !(calories > 0)) { b.setErr('Опиши блюдо и укажи калории ✨'); return }
+    if (!desc.trim() || !(calories > 0)) { b.setErr('Опиши блюдо и укажи калории.'); return }
     try {
       await api.logFood(desc.trim(), calories, meal)
       setDesc(''); setCal('')
       haptic(); notifyOk()
-      b.setOk('Записано в бортовой журнал 🌌')
+      b.setOk('Записано!')
       await load()
     } catch (e) { b.setErr(e) }
   }
@@ -48,20 +48,20 @@ export default function Diet() {
       const r = await api.dietPhoto(file)
       setPhotoPrev({ url: URL.createObjectURL(file), description: r.description, calories: r.calories })
       haptic()
-      if (r.needs_manual) b.setErr('Космос разглядел блюдо, но калории не оценил — введи вручную 🌠')
+      if (r.needs_manual) b.setErr('Блюдо распознано, но калории оценить не удалось — введи вручную.')
     } catch (e) { b.setErr(e) } finally { setPhotoBusy(false) }
   }
 
   async function confirmPhoto() {
     if (!photoPrev) return
     const calories = photoPrev.calories ?? parseFloat(manualCal.replace(',', '.'))
-    if (!(calories > 0)) { b.setErr('Укажи калории числом 🌠'); return }
+    if (!(calories > 0)) { b.setErr('Укажи калории числом.'); return }
     try {
       await api.logFood(photoPrev.description, calories, meal)
       setPhotoPrev(null); setManualCal('')
       if (fileRef.current) fileRef.current.value = ''
       notifyOk()
-      b.setOk('Фото-еда записана 🌌')
+      b.setOk('Записано!')
       await load()
     } catch (e) { b.setErr(e) }
   }
@@ -75,7 +75,7 @@ export default function Diet() {
       await api.saveBody(w, f)
       setWeight(''); setFat('')
       notifyOk()
-      b.setOk('Тело зафиксировано в звёздной карте ✨')
+      b.setOk('Сохранено!')
       await load()
     } catch (e) { b.setErr(e) } finally { setBodyBusy(false) }
   }
@@ -90,8 +90,8 @@ export default function Diet() {
       <h2 style={s.h}>🍽 Диета</h2>
       {b.BannerEl}
       {data.profile
-        ? <p style={s.sub}>🌌 {eaten}/{Math.round(goal)} ккал ({pct}%)</p>
-        : <p style={s.sub}>Диета не настроена в боте — логирование всё равно работает 🌠</p>}
+        ? <p style={s.sub}>{eaten}/{Math.round(goal)} ккал ({pct}%)</p>
+        : <p style={s.sub}>Диета не настроена в боте — логирование всё равно работает.</p>}
       <div style={{ background: 'rgba(167,139,250,0.18)', borderRadius: 8, height: 10, overflow: 'hidden' }}>
         <div style={{ width: `${pct}%`, height: '100%', background: 'linear-gradient(90deg, #8b5cf6, #22d3ee)', boxShadow: '0 0 12px rgba(139,92,246,0.8)' }} />
       </div>
@@ -113,7 +113,7 @@ export default function Diet() {
           <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
             onChange={(e) => onPhoto(e.target.files?.[0])} />
           <button onClick={() => fileRef.current?.click()} disabled={photoBusy} style={s.btnSm}>
-            {photoBusy ? '🔭 Сканирую космос…' : '📸 Фото еды'}
+            {photoBusy ? 'Анализирую фото…' : '📸 Фото еды'}
           </button>
         </div>
       </div>
@@ -121,7 +121,7 @@ export default function Diet() {
       {photoPrev && (
         <div style={s.card}>
           <img src={photoPrev.url} alt="еда" style={{ width: '100%', borderRadius: 12 }} />
-          <p style={s.sub}>✨ {photoPrev.description}{photoPrev.calories ? ` · ~${photoPrev.calories} ккал` : ''}</p>
+          <p style={s.sub}>{photoPrev.description}{photoPrev.calories ? ` · ~${photoPrev.calories} ккал` : ''}</p>
           {photoPrev.calories == null && (
             <input value={manualCal} onChange={(e) => setManualCal(e.target.value)}
               placeholder="Калории вручную" inputMode="decimal" style={s.input} />

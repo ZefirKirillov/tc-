@@ -28,7 +28,7 @@ export default function Dashboard({ me, setMe }: { me: any; setMe: any }) {
       haptic()
       if (res.spark_awarded) {
         notifyOk()
-        b.setOk('✨ Искра зажжена! Все категории заполнены 🌌')
+        b.setOk('✨ Искра зажжена! Все категории заполнены.')
       }
     } catch (e) {
       b.setErr(e)
@@ -39,7 +39,7 @@ export default function Dashboard({ me, setMe }: { me: any; setMe: any }) {
 
   return (
     <div>
-      <h2 style={s.h}>🌌 TrackCheck {me.rank?.emoji}</h2>
+      <h2 style={s.h}>TrackCheck {me.rank?.emoji}</h2>
       {b.BannerEl}
       <p style={s.sub}>{me.rank?.name} · 🔥 {me.streak} дней · ✨ {me.rank?.total_sparks}/{me.rank?.next_total}</p>
       <p style={s.sub}>🏋️ {me.workout?.current_count}/{me.workout?.monthly_goal} · 🍽 {Math.round(me.diet?.today_calories ?? 0)}/{Math.round(me.diet?.daily_goal ?? 0)}</p>

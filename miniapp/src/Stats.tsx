@@ -17,7 +17,7 @@ export default function Stats() {
 
   return (
     <div>
-      <h2 style={s.h}>📊 Созвездие прогресса</h2>
+      <h2 style={s.h}>📊 Статистика</h2>
       {b.BannerEl}
       <div style={{ ...s.row, marginTop: 8 }}>
         {[7, 14, 30].map((d) => (
@@ -36,7 +36,7 @@ export default function Stats() {
               <div style={s.row}><b>{d.date}</b><span>{Object.entries(d.ratings).map(([k, v]) => `${SHORT[k] ?? k}${v}`).join(' ')}</span></div>
             </div>
           ))}
-          {(data.daily ?? []).length === 0 && <p style={s.sub}>Пока пустой космос — нет оценок за период 🌌</p>}
+          {(data.daily ?? []).length === 0 && <p style={s.sub}>Пока нет оценок за период.</p>}
         </>
       )}
     </div>
