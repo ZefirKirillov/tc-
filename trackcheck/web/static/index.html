@@ -1,13 +1,24 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <meta name="theme-color" content="#0b0620" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0e11" />
+    <meta name="color-scheme" content="dark light" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <title>🌌 TrackCheck</title>
-    <style>html, body { margin: 0; padding: 0; background: #0b0620; }</style>
-    <script type="module" crossorigin src="/app/assets/index-3FcsMOZo.js"></script>
+    <title>TrackCheck</title>
+    <!-- paint the right background before JS boots, so there's no flash -->
+    <style>html, body { margin: 0; background: #0b0e11; } html[data-theme="light"], html[data-theme="light"] body { background: #eef1f3; }</style>
+    <script>
+      (function () {
+        var w = window.Telegram && window.Telegram.WebApp
+        var light = w && w.platform && w.platform !== 'unknown' ? w.colorScheme === 'light'
+          : window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches
+        if (light) document.documentElement.setAttribute('data-theme', 'light')
+      })()
+    </script>
+    <script type="module" crossorigin src="/app/assets/index-p6JzxZVd.js"></script>
+    <link rel="stylesheet" crossorigin href="/app/assets/index-CzdyFpRt.css">
   </head>
   <body>
     <div id="root"></div>

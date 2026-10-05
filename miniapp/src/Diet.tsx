@@ -1,14 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, haptic, notifyOk } from './api'
-import { s } from './styles'
-import { Skeletons, useBanner } from './ui'
+import { api } from './api'
+import { Ico } from './icons'
+import MainAction from './MainAction'
+import { haptic, notifyOk, type MainCfg } from './tg'
+import { Empty, fmt, LoadError, Meter, Section, Seg, Skeleton, Skeletons, useBanner } from './ui'
+
+const MEALS: Array<[string, string]> = [['Завтрак', 'Завтрак'], ['Обед', 'Обед'], ['Ужин', 'Ужин'], ['Еда', 'Еда']]
+
+function num(s: string): number {
+  return parseFloat(s.replace(',', '.'))
+}
 
 export default function Diet() {
   const b = useBanner()
   const [data, setData] = useState<any>(null)
+  const [loadErr, setLoadErr] = useState<unknown>(null)
   const [desc, setDesc] = useState('')
   const [cal, setCal] = useState('')
   const [meal, setMeal] = useState('Еда')
+  const [busy, setBusy] = useState(false)
   const [photoBusy, setPhotoBusy] = useState(false)
   const [photoPrev, setPhotoPrev] = useState<{ url: string; description: string; calories: number | null } | null>(null)
   const [manualCal, setManualCal] = useState('')
@@ -23,25 +33,30 @@ export default function Diet() {
       const [d, bd] = await Promise.all([api.diet(), api.body().catch(() => null)])
       setData(d)
       setBody(bd)
-    } catch (e) { b.setErr(e) }
+      setLoadErr(null)
+    } catch (e) { if (data) b.setErr(e); else setLoadErr(e) }
   }
   useEffect(() => { load() }, [])
 
+  // Release the object URL of the previous photo preview.
+  useEffect(() => () => { if (photoPrev) URL.revokeObjectURL(photoPrev.url) }, [photoPrev])
+
   async function log() {
-    const calories = parseFloat(cal.replace(',', '.'))
+    const calories = num(cal)
     if (!desc.trim() || !(calories > 0)) { b.setErr('Опиши блюдо и укажи калории.'); return }
+    setBusy(true)
     try {
       await api.logFood(desc.trim(), calories, meal)
       setDesc(''); setCal('')
-      haptic(); notifyOk()
-      b.setOk('Записано!')
+      notifyOk()
+      b.setOk('Записано.')
       await load()
-    } catch (e) { b.setErr(e) }
+    } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
   async function onPhoto(file: File | undefined) {
     if (!file) return
-    if (file.size > 5 * 1024 * 1024) { b.setErr('Фото слишком большое (макс 5 МБ) 📸'); return }
+    if (file.size > 5 * 1024 * 1024) { b.setErr('Фото слишком большое (макс. 5 МБ).'); return }
     setPhotoBusy(true)
     b.clear()
     try {
@@ -49,104 +64,153 @@ export default function Diet() {
       setPhotoPrev({ url: URL.createObjectURL(file), description: r.description, calories: r.calories })
       haptic()
       if (r.needs_manual) b.setErr('Блюдо распознано, но калории оценить не удалось — введи вручную.')
-    } catch (e) { b.setErr(e) } finally { setPhotoBusy(false) }
+    } catch (e) { b.setErr(e) } finally {
+      setPhotoBusy(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
   }
 
   async function confirmPhoto() {
     if (!photoPrev) return
-    const calories = photoPrev.calories ?? parseFloat(manualCal.replace(',', '.'))
+    const calories = photoPrev.calories ?? num(manualCal)
     if (!(calories > 0)) { b.setErr('Укажи калории числом.'); return }
+    setBusy(true)
     try {
       await api.logFood(photoPrev.description, calories, meal)
       setPhotoPrev(null); setManualCal('')
-      if (fileRef.current) fileRef.current.value = ''
       notifyOk()
-      b.setOk('Записано!')
+      b.setOk('Записано.')
       await load()
-    } catch (e) { b.setErr(e) }
+    } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
   async function saveBody() {
-    const w = weight.trim() ? parseFloat(weight.replace(',', '.')) : null
-    const f = fat.trim() ? parseFloat(fat.replace(',', '.')) : null
+    const w = weight.trim() ? num(weight) : null
+    const f = fat.trim() ? num(fat) : null
     if (w === null && f === null) return
     setBodyBusy(true)
     try {
       await api.saveBody(w, f)
       setWeight(''); setFat('')
       notifyOk()
-      b.setOk('Сохранено!')
+      b.setOk('Замер сохранён.')
       await load()
     } catch (e) { b.setErr(e) } finally { setBodyBusy(false) }
   }
 
-  if (!data) return <div><h2 style={s.h}>🍽 Диета</h2><Skeletons /></div>
+  // One primary action at a time: photo confirm > manual entry.
+  let main: MainCfg = null
+  if (photoPrev) main = { text: 'Подтвердить блюдо', onClick: confirmPhoto, busy, disabled: photoPrev.calories == null && !(num(manualCal) > 0) }
+  else if (desc.trim() || cal.trim()) main = { text: 'Записать приём пищи', onClick: log, busy, disabled: !desc.trim() || !(num(cal) > 0) }
+
+  if (!data) {
+    if (loadErr) return <LoadError error={loadErr} onRetry={() => { setLoadErr(null); load() }} />
+    return <div><Skeleton h={88} /><div className="mt" /><Skeletons n={2} h={56} /></div>
+  }
+
   const goal = data.profile?.daily_calories ?? 0
   const eaten = Math.round(data.today_calories ?? 0)
-  const pct = goal > 0 ? Math.min(100, Math.round((eaten / goal) * 100)) : 0
+  const left = Math.round(goal - eaten)
+  const entries: any[] = data.today_log ?? []
 
   return (
     <div>
-      <h2 style={s.h}>🍽 Диета</h2>
       {b.BannerEl}
-      {data.profile
-        ? <p style={s.sub}>{eaten}/{Math.round(goal)} ккал ({pct}%)</p>
-        : <p style={s.sub}>Диета не настроена в боте — логирование всё равно работает.</p>}
-      <div style={{ background: 'rgba(167,139,250,0.18)', borderRadius: 8, height: 10, overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', background: 'linear-gradient(90deg, #8b5cf6, #22d3ee)', boxShadow: '0 0 12px rgba(139,92,246,0.8)' }} />
+
+      <div className="panel">
+        {data.profile ? (
+          <>
+            <div className="hstack spread" style={{ alignItems: 'baseline' }}>
+              <span className="label">Сегодня</span>
+              <span className="label" style={left < 0 ? { color: 'var(--danger)' } : undefined}>
+                {left >= 0 ? `осталось ${fmt(left)}` : `сверх нормы ${fmt(-left)}`}
+              </span>
+            </div>
+            <div className="num clip" style={{ fontSize: 30, fontWeight: 600, margin: '4px 0 10px' }}>
+              {fmt(eaten)}<span className="muted" style={{ fontSize: 15 }}> / {fmt(Math.round(goal))} ккал</span>
+            </div>
+            <Meter value={eaten} max={goal} tone={eaten > goal ? 'over' : undefined} />
+          </>
+        ) : (
+          <>
+            <span className="label">Сегодня</span>
+            <div className="num" style={{ fontSize: 30, fontWeight: 600, margin: '4px 0 6px' }}>
+              {fmt(eaten)}<span className="muted" style={{ fontSize: 15 }}> ккал</span>
+            </div>
+            <div className="row-meta">Норма не настроена в боте — записи всё равно сохраняются.</div>
+          </>
+        )}
       </div>
 
-      <div style={s.card}>
-        <div style={s.row}>
-          {['Завтрак', 'Обед', 'Ужин', 'Еда'].map((m) => (
-            <button key={m} onClick={() => { setMeal(m); haptic() }} style={meal === m ? s.btnActive : s.btnSm}>{m}</button>
-          ))}
-        </div>
-        <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Что съел? (овсянка 100г)"
-          style={{ ...s.input, marginTop: 8 }} maxLength={300} />
-        <div style={{ ...s.row, marginTop: 8, marginBottom: 0 }}>
-          <input value={cal} onChange={(e) => setCal(e.target.value)} placeholder="Ккал" inputMode="decimal"
-            style={s.inputSm} />
-          <button onClick={log} style={s.primary}>+ Записать</button>
-        </div>
-        <div style={{ ...s.row, marginTop: 8, marginBottom: 0 }}>
-          <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
-            onChange={(e) => onPhoto(e.target.files?.[0])} />
-          <button onClick={() => fileRef.current?.click()} disabled={photoBusy} style={s.btnSm}>
-            {photoBusy ? 'Анализирую фото…' : '📸 Фото еды'}
-          </button>
-        </div>
-      </div>
+      <Section label="Записать">
+        <Seg value={meal} options={MEALS} onChange={setMeal} label="Приём пищи" />
+        {!photoPrev && (
+          <>
+            <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Что съел? Например, овсянка 100 г"
+              className="field mt" maxLength={300} />
+            <div className="field-row mt">
+              <input value={cal} onChange={(e) => setCal(e.target.value)} placeholder="Ккал" inputMode="decimal"
+                className="field field-num" style={{ flex: '0 1 120px' }} maxLength={7}
+                onKeyDown={(e) => { if (e.key === 'Enter') log() }} />
+              <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden
+                onChange={(e) => onPhoto(e.target.files?.[0])} />
+              <button onClick={() => fileRef.current?.click()} disabled={photoBusy} className="btn btn-ghost grow" style={{ minHeight: 44 }}>
+                <Ico.camera size={18} /> {photoBusy ? 'Анализирую…' : 'По фото'}
+              </button>
+            </div>
+          </>
+        )}
 
-      {photoPrev && (
-        <div style={s.card}>
-          <img src={photoPrev.url} alt="еда" style={{ width: '100%', borderRadius: 12 }} />
-          <p style={s.sub}>{photoPrev.description}{photoPrev.calories ? ` · ~${photoPrev.calories} ккал` : ''}</p>
-          {photoPrev.calories == null && (
-            <input value={manualCal} onChange={(e) => setManualCal(e.target.value)}
-              placeholder="Калории вручную" inputMode="decimal" style={s.input} />
+        {photoPrev && (
+          <div className="panel mt">
+            <img src={photoPrev.url} alt="Фото блюда" className="photo" />
+            <div className="hstack spread mt" style={{ alignItems: 'flex-start' }}>
+              <span className="wrap grow">{photoPrev.description}</span>
+              {photoPrev.calories != null && <span className="num accent" style={{ flex: 'none' }}>~{fmt(photoPrev.calories)} ккал</span>}
+            </div>
+            {photoPrev.calories == null && (
+              <input value={manualCal} onChange={(e) => setManualCal(e.target.value)}
+                placeholder="Калории вручную" inputMode="decimal" className="field field-num mt" />
+            )}
+            <button onClick={() => { setPhotoPrev(null); setManualCal('') }} className="btn btn-quiet mt">Отмена</button>
+          </div>
+        )}
+        <MainAction cfg={main} />
+      </Section>
+
+      <Section label="Журнал дня" aux={entries.length > 0 && <span className="num muted" style={{ fontSize: 12 }}>{entries.length}</span>}>
+        {entries.length === 0
+          ? <Empty icon="food" title="Пока ничего не записано" text="Добавь первый приём пищи — текстом или по фото." />
+          : (
+            <div className="rows">
+              {entries.map((e, i) => (
+                <div key={i} className="row">
+                  <div className="grow wrap">
+                    <div className="label">{e.meal}</div>
+                    <div>{e.description}</div>
+                  </div>
+                  <span className="num" style={{ flex: 'none' }}>{fmt(Math.round(e.calories))}</span>
+                </div>
+              ))}
+            </div>
           )}
-          <div style={{ ...s.row, marginTop: 8, marginBottom: 0 }}>
-            <button onClick={() => { setPhotoPrev(null); setManualCal('') }} style={s.btnSm}>Отмена</button>
-            <button onClick={confirmPhoto} style={s.primary}>✅ Подтвердить</button>
+      </Section>
+
+      <Section label="Замер тела">
+        <div className="panel">
+          <div className="hstack" style={{ gap: 20, marginBottom: 12 }}>
+            <div><span className="label">Вес</span><div className="num" style={{ fontSize: 20 }}>{body?.weight != null ? `${fmt(body.weight)} кг` : '—'}</div></div>
+            <div><span className="label">Жир</span><div className="num" style={{ fontSize: 20 }}>{body?.body_fat != null ? `${fmt(body.body_fat)} %` : '—'}</div></div>
+          </div>
+          <div className="field-row">
+            <input value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="Вес, кг" inputMode="decimal" className="field field-num" maxLength={6} />
+            <input value={fat} onChange={(e) => setFat(e.target.value)} placeholder="% жира" inputMode="decimal" className="field field-num" maxLength={5} />
+            <button onClick={saveBody} disabled={bodyBusy || (!weight.trim() && !fat.trim())} className="btn btn-ghost btn-icon" style={{ minHeight: 44 }} aria-label="Сохранить замер">
+              <Ico.check size={18} />
+            </button>
           </div>
         </div>
-      )}
-
-      {(data.today_log ?? []).map((e: any, i: number) => (
-        <div key={i} style={s.card}>
-          <div style={s.row}><span>{e.meal}: {e.description}</span><b>{Math.round(e.calories)}</b></div>
-        </div>
-      ))}
-
-      <div style={s.card}>
-        <p style={s.sub}>⚖️ Тело {(body?.weight != null) && `· ${body.weight} кг`} {(body?.body_fat != null) && `· ${body.body_fat}% жира`}</p>
-        <div style={{ ...s.row, marginBottom: 0 }}>
-          <input value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="Вес, кг" inputMode="decimal" style={s.inputSm} />
-          <input value={fat} onChange={(e) => setFat(e.target.value)} placeholder="% жира" inputMode="decimal" style={s.inputSm} />
-          <button onClick={saveBody} disabled={bodyBusy} style={s.primary}>✓</button>
-        </div>
-      </div>
+      </Section>
     </div>
   )
 }

@@ -1,9 +1,10 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
-import { ready } from './api'
+import { initTelegram } from './tg'
+import './theme.css'
 
-ready()
+initTelegram()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

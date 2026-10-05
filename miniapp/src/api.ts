@@ -1,29 +1,25 @@
-const tg = (window as any).Telegram?.WebApp
+import { tg } from './tg'
 
 export function getInitData(): string {
   return tg?.initData ?? ''
 }
 
-export function getUser() {
-  return tg?.initDataUnsafe?.user ?? null
-}
-
-export function ready() {
-  try {
-    tg?.ready()
-    tg?.expand()
-  } catch { /* not in Telegram — dev mode */ }
-}
-
-export function haptic(kind: 'light' | 'medium' | 'heavy' = 'light') {
-  try { tg?.HapticFeedback?.impactOccurred(kind) } catch { /* noop */ }
-}
-
-export function notifyOk() {
-  try { tg?.HapticFeedback?.notificationOccurred('success') } catch { /* noop */ }
-}
-
 // Server now returns {ok, error, message} — surface the Russian message.
+// A few codes come without a message (401 from the auth decorator, proxies).
+const FALLBACK: Record<string, string> = {
+  unauthorized: 'Открой TrackCheck через Telegram — кнопка Mini App.',
+  bad_response: 'Сервер ответил что-то странное. Попробуй ещё раз.',
+}
+
+function fail(body: any, status: number): ApiError {
+  const code = body.error ?? `http_${status}`
+  const msg = body.message ?? FALLBACK[code] ?? (status >= 500 ? 'Сервер временно недоступен. Попробуй позже.' : code)
+  return new ApiError(code, msg)
+}
+
+export function isNetworkError(e: unknown): boolean {
+  return e instanceof ApiError && e.code === 'network'
+}
 export class ApiError extends Error {
   code: string
   constructor(code: string, message: string) {
@@ -43,10 +39,7 @@ async function req(path: string, opts: RequestInit = {}) {
     throw new ApiError('network', 'Нет соединения. Проверь интернет и попробуй ещё раз.')
   }
   const body = await res.json().catch(() => ({ ok: false, error: 'bad_response' }))
-  if (!res.ok || !body.ok) {
-    const code = body.error ?? `http_${res.status}`
-    throw new ApiError(code, body.message ?? code)
-  }
+  if (!res.ok || !body.ok) throw fail(body, res.status)
   return body.data
 }
 
@@ -65,10 +58,7 @@ async function reqPhoto(path: string, file: File) {
     throw new ApiError('network', 'Нет соединения. Проверь интернет и попробуй ещё раз.')
   }
   const body = await res.json().catch(() => ({ ok: false, error: 'bad_response' }))
-  if (!res.ok || !body.ok) {
-    const code = body.error ?? `http_${res.status}`
-    throw new ApiError(code, body.message ?? code)
-  }
+  if (!res.ok || !body.ok) throw fail(body, res.status)
   return body.data
 }
 

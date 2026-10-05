@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
-import { api, haptic } from './api'
-import { s } from './styles'
-import { Skeletons, useBanner } from './ui'
+import { api } from './api'
+import { Ico } from './icons'
+import MainAction from './MainAction'
+import { haptic } from './tg'
+import { Empty, Section, Skeletons, useBanner } from './ui'
 
 export default function AI() {
   const b = useBanner()
   const [q, setQ] = useState('')
   const [answer, setAnswer] = useState<string | null>(null)
+  const [answerKind, setAnswerKind] = useState<'last' | 'advice' | 'ask'>('last')
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
 
@@ -23,29 +26,40 @@ export default function AI() {
     try {
       const r = advice ? await api.aiAdvice() : await api.aiAsk(question)
       setAnswer(r.answer)
+      setAnswerKind(advice ? 'advice' : 'ask')
       if (!advice) setQ('')
       haptic()
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
+  const label = answerKind === 'advice' ? 'Совет' : answerKind === 'ask' ? 'Ответ' : 'Последний ответ'
+
   return (
     <div>
-      <h2 style={s.h}>🤖 CheckAI</h2>
       {b.BannerEl}
-      <button onClick={() => ask(true)} disabled={busy} style={s.primary}>
-        {busy ? 'Думаю…' : '💡 Дай совет'}
+
+      <button onClick={() => ask(true)} disabled={busy} className="cta" style={{ marginTop: 0 }}>
+        <Ico.ai size={22} className="cta-icon" />
+        <span className="grow">
+          <span style={{ fontWeight: 600, display: 'block' }}>{busy ? 'CheckAI думает…' : 'Совет на сегодня'}</span>
+          <span className="row-meta">По твоим оценкам, тренировкам и питанию</span>
+        </span>
+        <Ico.arrow size={18} className="accent" />
       </button>
-      <div style={s.card}>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Спроси что-нибудь…"
-          style={s.input} maxLength={2000} onKeyDown={(e) => { if (e.key === 'Enter') ask() }} />
-        <div style={{ marginTop: 8, marginBottom: 0 }}>
-          <button onClick={() => ask()} disabled={busy || q.trim().length < 3} style={s.primary}>
-            {busy ? 'Думаю…' : 'Спросить'}
-          </button>
-        </div>
-      </div>
-      {loading && <Skeletons n={1} />}
-      {answer && <div style={s.card}><div style={{ whiteSpace: 'pre-wrap', fontSize: 14 }}>{answer}</div></div>}
+
+      <Section label="Вопрос">
+        <textarea value={q} onChange={(e) => setQ(e.target.value)} placeholder="Например: как восстановиться после тяжёлой тренировки ног?"
+          className="field" style={{ minHeight: 88 }} maxLength={2000} disabled={busy} />
+        {q.length > 1500 && <div className="row-meta num" style={{ textAlign: 'right' }}>{q.length}/2000</div>}
+        <MainAction cfg={q.trim() ? { text: 'Спросить CheckAI', onClick: () => ask(), busy, disabled: q.trim().length < 3 } : null} />
+      </Section>
+
+      <Section label={label}>
+        {(loading || busy) && <Skeletons n={1} h={120} />}
+        {!loading && !busy && (answer
+          ? <div className="panel answer">{answer}</div>
+          : <Empty icon="ai" title="Здесь появится ответ" text="Задай вопрос или попроси совет — CheckAI учитывает твои данные из TrackCheck." />)}
+      </Section>
     </div>
   )
 }
