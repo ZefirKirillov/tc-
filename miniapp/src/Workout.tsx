@@ -355,7 +355,7 @@ export default function Workout() {
         {!inTelegram && backHandler && (
           <button onClick={wizBack} className="btn btn-quiet mt"><Ico.back size={16} /> Назад</button>
         )}
-        <MainAction cfg={main} />
+        <MainAction cfg={main} float />
       </div>
     )
   }
@@ -456,7 +456,7 @@ export default function Workout() {
         </>
       )}
 
-      <MainAction cfg={main} />
+      <MainAction cfg={main} float />
 
       {(active || finished) && logs.length > 0 && (
         <Section label="Сессия" aux={<span className="num muted" style={{ fontSize: 12 }}>{logs.length}/{exs.length}</span>}>

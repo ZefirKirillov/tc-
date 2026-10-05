@@ -57,6 +57,11 @@
   --nav-gap: 22px; /* island floats above the bottom edge */
   --island: rgba(22, 29, 35, 0.78);
   --island-shadow: 0 12px 32px rgba(0, 0, 0, 0.32), 0 2px 8px rgba(0, 0, 0, 0.14);
+  /* widget states: gold = earned, silver = done but neutral */
+  --gold: #f3c35a;
+  --gold-glow: rgba(243, 195, 90, 0.42);
+  --silver: #c3cdd6;
+  --silver-glow: rgba(195, 205, 214, 0.3);
 }
 
 :root[data-theme="light"] {
@@ -84,6 +89,10 @@
   --danger-soft: rgba(210, 59, 53, 0.09);
   --island: rgba(255, 255, 255, 0.82);
   --island-shadow: 0 10px 28px rgba(20, 40, 55, 0.12), 0 1px 4px rgba(20, 40, 55, 0.08);
+  --gold: #c99212;
+  --gold-glow: rgba(214, 160, 30, 0.32);
+  --silver: #8796a3;
+  --silver-glow: rgba(120, 140, 160, 0.26);
 }
 
 /* ---------- base ---------- */
@@ -658,3 +667,125 @@ textarea.field { min-height: 128px; resize: vertical; line-height: 1.45; font-si
 .ci-auto-row svg { color: var(--text-3); }
 .ci-auto-row .num { color: var(--text); font-size: 15px; }
 .ci-auto-row .num.muted { color: var(--text-3); }
+
+/* ---------- floating primary action (above the island) ---------- */
+
+.fab {
+  position: fixed;
+  z-index: 19;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(calc(100% - 32px), 420px);
+  bottom: calc(var(--safe-bottom) + var(--nav-gap) + var(--nav-h) + 12px);
+  animation: tc-in var(--t-med) var(--ease);
+}
+.fab .btn {
+  width: 100%;
+  min-height: 50px;
+  border-radius: 999px;
+  font-size: 16px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.3);
+}
+.fab .btn:disabled { opacity: 1; background: var(--surface-2); color: var(--text-3); box-shadow: none; }
+.fab-spacer { height: 66px; }
+
+/* ---------- «Обзор» widgets ---------- */
+
+.widgets { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; }
+.w-wide { grid-column: 1 / -1; }
+
+.widget {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px 15px;
+  border: 1px solid var(--line);
+  border-radius: 30px;              /* squircle-ish */
+  background: var(--surface-1);
+  color: var(--text);
+  text-align: left;
+  transition: transform var(--t-fast) var(--ease);
+  --edge: var(--gold);
+  --edge-glow: var(--gold-glow);
+}
+.widget.is-silver { --edge: var(--silver); --edge-glow: var(--silver-glow); }
+.widget:active { transform: scale(0.97); }
+/* Coloured edge + halo, faded in by --glow (0..1). */
+.widget::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  border: 1.5px solid var(--edge);
+  box-shadow: 0 0 22px 1px var(--edge-glow), inset 0 0 14px var(--edge-glow);
+  opacity: var(--glow, 0);
+  pointer-events: none;
+  transition: opacity var(--t-slow) var(--ease);
+}
+
+.w-square { aspect-ratio: 1 / 1; justify-content: space-between; min-width: 0; }
+.w-title { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; color: var(--text-2); }
+.w-score { font-size: 46px; font-weight: 650; line-height: 1; letter-spacing: -0.03em; }
+.w-score small { font-size: 15px; font-weight: 500; color: var(--text-3); margin-left: 2px; letter-spacing: 0; }
+.w-foot { font-size: 13px; color: var(--text-2); font-weight: 550; }
+.w-foot.is-gold { color: var(--gold); }
+.w-foot.is-silver { color: var(--silver); }
+.w-foot-block { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+
+/* calorie bar: steel fill that turns gold as you approach the goal (--glow) */
+.w-bar { position: relative; display: block; width: 100%; height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.w-bar i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--metal); transition: width var(--t-slow) var(--ease); }
+.w-bar i::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: var(--gold); opacity: var(--glow, 0); transition: opacity var(--t-slow) var(--ease); }
+
+/* check-in: three circles */
+.ci-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; padding: 4px 6px 0; }
+.ci-cell { display: flex; flex-direction: column; align-items: center; gap: 7px; min-width: 0; }
+.widget.ci-circle {
+  width: 100%;
+  max-width: 96px;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+}
+.ci-num { font-size: 30px; font-weight: 650; }
+.ci-label { font-size: 13px; color: var(--text-2); font-weight: 550; }
+
+/* tasks */
+.w-tasks { gap: 10px; }
+.w-list { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.w-task { display: flex; align-items: center; gap: 8px; width: 100%; font-size: 15px; min-width: 0; }
+.w-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); flex: none; margin: 0 4px; }
+
+/* CheckAI field under the orbit */
+.ask {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 6px 6px 6px 14px;
+  border-radius: 999px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  transition: border-color var(--t-fast);
+}
+.ask:focus-within { border-color: var(--accent-line); }
+.ask-icon { color: var(--accent); flex: none; }
+.ask-input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); font-size: 16px; padding: 8px 0; outline: none; }
+.ask-input::placeholder { color: var(--text-3); }
+.ask-send {
+  flex: none;
+  width: 38px; height: 38px;
+  border-radius: 50%;
+  border: 0;
+  display: grid; place-items: center;
+  background: var(--accent);
+  color: var(--accent-ink);
+  transition: opacity var(--t-fast), transform var(--t-fast);
+}
+.ask-send:disabled { background: var(--surface-2); color: var(--text-3); }
+.ask-send:active:not(:disabled) { transform: scale(0.92); }
+.ask-link { display: block; margin: 6px 0 0 auto; border: 0; background: none; color: var(--text-3); font-size: 13px; padding: 4px 6px; }

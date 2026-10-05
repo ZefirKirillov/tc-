@@ -151,7 +151,7 @@ export default function Diet() {
         <Meter value={eaten} max={goal} tone={eaten > goal ? 'over' : undefined} />
       </div>
 
-      {!sheetOpen && <MainAction cfg={main} />}
+      {!sheetOpen && <MainAction cfg={main} float />}
 
       <Section label="Журнал дня" aux={entries.length > 0 && <span className="num muted" style={{ fontSize: 12 }}>{entries.length}</span>}>
         {entries.length === 0

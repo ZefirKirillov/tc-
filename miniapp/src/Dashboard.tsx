@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react'
 import { api, keep, peek } from './api'
 import type { Tab } from './App'
 import CheckIn, { CATS, MANUAL } from './CheckIn'
-import { Ico, type IconName } from './icons'
+import { Ico } from './icons'
 import { cloudGet, cloudSet, hapticSelect } from './tg'
 import Tour from './Tour'
-import { fmt, Meter, plural, Section, useBanner } from './ui'
+import { fmt, fmtDate, Meter, plural, useBanner } from './ui'
 
 const TOUR_KEY = 'tc_tour_v1'
 
@@ -56,47 +56,68 @@ function Orbit({ rated, workouts, kcal, streak }: {
   )
 }
 
-// ---------- today list ----------
+// ---------- widgets ----------
+// One edge/glow mechanism for every widget: `glow` 0..1 fades in a coloured edge with a
+// soft halo (gold = earned, silver = done but neutral). Plain edge when glow is 0.
 
-function workoutStatus(w: any): { sub: string; done: boolean } {
-  if (!w) return { sub: 'Загрузка…', done: false }
-  if (!w.has_plan) return { sub: 'Создай план — это пара минут', done: false }
-  const exs: any[] = w.today_exercises ?? []
-  if (w.is_rest_day || exs.length === 0) return { sub: 'Сегодня отдых', done: true }
-  if (w.session?.status === 'done') return { sub: 'Готово', done: true }
-  if (w.session) {
-    const n = (w.logs ?? []).length
-    return { sub: `В процессе · ${n} из ${exs.length}`, done: false }
-  }
-  return { sub: `${exs.length} ${plural(exs.length, 'упражнение', 'упражнения', 'упражнений')}`, done: false }
-}
+type Tone = 'gold' | 'silver'
 
-function Cell({ icon, tone, title, sub, done, onClick, tour }: {
-  icon: IconName; tone?: 'metal' | 'warm'; title: string; sub: string; done?: boolean; onClick: () => void; tour?: string
+function Widget({ tone = 'gold', glow = 0, className = '', onClick, children, tour, label }: {
+  tone?: Tone; glow?: number; className?: string; onClick: () => void; children: React.ReactNode; tour?: string; label: string
 }) {
-  const Icon = Ico[icon]
   return (
-    <button className="cell" onClick={() => { hapticSelect(); onClick() }} data-tour={tour}>
-      <span className={`cell-icon${tone ? ` is-${tone}` : ''}`}><Icon size={20} /></span>
-      <span className="grow">
-        <span className="cell-title" style={{ display: 'block' }}>{title}</span>
-        <span className="cell-sub clip" style={{ display: 'block' }}>{sub}</span>
-      </span>
-      {done ? <Ico.check size={20} className="cell-done" /> : <Ico.arrow size={16} className="cell-chev" />}
+    <button className={`widget is-${tone} ${className}`} data-tour={tour} aria-label={label}
+      style={{ '--glow': Math.max(0, Math.min(1, glow)).toFixed(2) } as React.CSSProperties}
+      onClick={() => { hapticSelect(); onClick() }}>
+      {children}
     </button>
   )
 }
 
+/** Workout today: done → gold, rest day → silver, otherwise plain. */
+function workoutState(w: any): { text: string; tone: Tone; glow: number } {
+  if (!w) return { text: 'Загрузка…', tone: 'gold', glow: 0 }
+  if (!w.has_plan) return { text: 'Нет плана', tone: 'gold', glow: 0 }
+  const exs: any[] = w.today_exercises ?? []
+  if (w.is_rest_day || exs.length === 0) return { text: 'День отдыха', tone: 'silver', glow: 1 }
+  if (w.session?.status === 'done') return { text: 'Сделана', tone: 'gold', glow: 1 }
+  if (w.session?.status === 'skipped') return { text: 'Пропущена', tone: 'gold', glow: 0 }
+  if (w.session) return { text: `В процессе · ${(w.logs ?? []).length}/${exs.length}`, tone: 'gold', glow: 0 }
+  return { text: 'Не сделана', tone: 'gold', glow: 0 }
+}
+
+/** 1 at the calorie goal, fading as you move away from it (overeating fades twice as fast). */
+function dietCloseness(eaten: number, goal: number): number {
+  if (goal <= 0 || eaten <= 0) return 0
+  const r = eaten / goal
+  return r <= 1 ? r : Math.max(0, 1 - (r - 1) * 2)
+}
+
+function Score({ value }: { value?: number }) {
+  return value
+    ? <div className="w-score num">{value}<small>/10</small></div>
+    : <div className="w-score num muted">—</div>
+}
+
+function taskOrder(a: any, b: any): number {
+  if (!!a.is_priority !== !!b.is_priority) return a.is_priority ? -1 : 1
+  if (a.deadline && b.deadline) return a.deadline < b.deadline ? -1 : a.deadline > b.deadline ? 1 : 0
+  if (a.deadline || b.deadline) return a.deadline ? -1 : 1
+  return a.id - b.id
+}
+
 // ---------- screen ----------
 
-export default function Dashboard({ me, setMe, go, openCheckin }: {
-  me: any; setMe: any; go: (t: Tab) => void; openCheckin?: boolean
+export default function Dashboard({ me, setMe, go, openCheckin, askAI }: {
+  me: any; setMe: any; go: (t: Tab) => void; openCheckin?: boolean; askAI: (question: string) => void
 }) {
   const b = useBanner()
-  const [checkin, setCheckin] = useState(!!openCheckin)
+  // null = closed; number = open at that manual category (-1 = first unrated)
+  const [checkin, setCheckin] = useState<number | null>(openCheckin ? -1 : null)
   const [tour, setTour] = useState(false)
   const [workout, setWorkout] = useState<any>(() => peek('workout') ?? null)
   const [tasks, setTasks] = useState<any[] | null>(() => peek('tasks') ?? null)
+  const [question, setQuestion] = useState('')
 
   useEffect(() => {
     api.workout().then((d) => setWorkout(keep('workout', d))).catch(() => {})
@@ -110,10 +131,17 @@ export default function Dashboard({ me, setMe, go, openCheckin }: {
     cloudSet(TOUR_KEY, '1')
   }
 
+  function submitQuestion(e?: React.FormEvent) {
+    e?.preventDefault()
+    const q = question.trim()
+    if (q.length < 3) return
+    hapticSelect()
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    askAI(q)
+  }
+
   const ratings = me.today_ratings ?? {}
   const rated = CATS.map(([k]) => (ratings[k] ?? 0) > 0)
-  const ratedN = rated.filter(Boolean).length
-  const manualN = MANUAL.filter(([k]) => (ratings[k] ?? 0) > 0).length
 
   const wDone = me.workout?.current_count ?? 0
   const wGoal = me.workout?.monthly_goal ?? 0
@@ -126,8 +154,13 @@ export default function Dashboard({ me, setMe, go, openCheckin }: {
   const nextTotal = me.rank?.next_total
   const maxRank = nextTotal == null || nextTotal <= sparks
 
-  const ws = workoutStatus(workout)
-  const openTasks = tasks?.filter((t) => !t.is_done).length
+  const ws = workoutState(workout)
+  const near = dietOn ? dietCloseness(kcal, kcalGoal) : 0
+
+  const allTasks = tasks ?? []
+  const openTasks = allTasks.filter((t) => !t.is_done)
+  const topTasks = [...openTasks].sort(taskOrder).slice(0, 3)
+  const tasksDone = allTasks.length ? (allTasks.length - openTasks.length) / allTasks.length : 0
 
   return (
     <div>
@@ -151,27 +184,82 @@ export default function Dashboard({ me, setMe, go, openCheckin }: {
         </div>
       </div>
 
-      <Section label="План на сегодня">
-        <div className="cells" data-tour="today">
-          <Cell tour="checkin" icon="target" title="Чек-ин дня"
-            sub={ratedN === 5 ? 'Готово — искра зажжена'
-              : manualN === MANUAL.length ? 'Готово'
-              : manualN === 0 ? `${MANUAL.length} оценки · минута` : `${manualN} из ${MANUAL.length}`}
-            done={manualN === MANUAL.length} onClick={() => setCheckin(true)} />
-          <Cell icon="dumbbell" tone="metal" title="Тренировка" sub={ws.sub} done={ws.done} onClick={() => go('workout')} />
-          <Cell icon="food" title="Питание"
-            sub={dietOn ? `${fmt(kcal)} из ${fmt(kcalGoal)} ккал` : 'Задай норму калорий'}
-            onClick={() => go('diet')} />
-          <Cell icon="tasks" title="Задачи"
-            sub={openTasks == null ? 'Загрузка…' : tasks!.length === 0 ? 'Пока пусто' : openTasks === 0 ? 'Всё сделано' : `${openTasks} ${plural(openTasks, 'активная', 'активные', 'активных')}`}
-            done={openTasks === 0 && (tasks?.length ?? 0) > 0} onClick={() => go('tasks')} />
-          <Cell icon="ai" title="CheckAI" sub="Совет по твоим данным" onClick={() => go('ai')} />
+      <form className="ask" onSubmit={submitQuestion} data-tour="ask">
+        <Ico.ai size={18} className="ask-icon" />
+        <input className="ask-input" value={question} onChange={(e) => setQuestion(e.target.value)}
+          placeholder="Спроси CheckAI…" maxLength={2000} enterKeyHint="send" aria-label="Вопрос для CheckAI" />
+        <button type="submit" className="ask-send" disabled={question.trim().length < 3} aria-label="Спросить">
+          <Ico.arrow size={18} />
+        </button>
+      </form>
+      <button className="ask-link" onClick={() => go('ai')}>Открыть CheckAI →</button>
+
+      <div className="widgets" data-tour="today">
+        <div className="w-wide ci-row" data-tour="checkin">
+          {MANUAL.map(([k, label, icon], i) => {
+            const v = ratings[k] ?? 0
+            const Icon = Ico[icon]
+            return (
+              <div key={k} className="ci-cell">
+                <Widget className="ci-circle" label={`${label}: ${v || 'не оценено'}`}
+                  tone={v >= 7 ? 'gold' : 'silver'} glow={v ? 1 : 0} onClick={() => setCheckin(i)}>
+                  {v ? <span className="num ci-num">{v}</span> : <Icon size={24} className="muted" />}
+                </Widget>
+                <span className="ci-label">{label}</span>
+              </div>
+            )
+          })}
         </div>
-      </Section>
+
+        <Widget className="w-square" label="Тренировка" tone={ws.tone} glow={ws.glow} onClick={() => go('workout')}>
+          <span className="w-title"><Ico.dumbbell size={16} /> Тренировка</span>
+          <Score value={ratings['активность']} />
+          <span className={`w-foot${ws.glow ? (ws.tone === 'silver' ? ' is-silver' : ' is-gold') : ''}`}>{ws.text}</span>
+        </Widget>
+
+        <Widget className="w-square" label="Питание" glow={near} onClick={() => go('diet')}>
+          <span className="w-title"><Ico.food size={16} /> Питание</span>
+          <Score value={ratings['еда']} />
+          {dietOn ? (
+            <span className="w-foot-block">
+              <span className="w-bar" style={{ '--glow': near.toFixed(2) } as React.CSSProperties}>
+                <i style={{ width: `${Math.min(100, kcalGoal ? (kcal / kcalGoal) * 100 : 0)}%` }} />
+              </span>
+              <span className="w-foot num">{fmt(kcal)} / {fmt(kcalGoal)}</span>
+            </span>
+          ) : <span className="w-foot">Задай норму</span>}
+        </Widget>
+
+        <Widget className="w-wide w-tasks" label="Задачи" glow={tasksDone} onClick={() => go('tasks')}>
+          <span className="hstack spread" style={{ width: '100%' }}>
+            <span className="w-title"><Ico.tasks size={16} /> Задачи</span>
+            <span className="num muted" style={{ fontSize: 13 }}>
+              {tasks == null ? '…' : allTasks.length === 0 ? '' : `${allTasks.length - openTasks.length}/${allTasks.length}`}
+            </span>
+          </span>
+          {tasks == null ? <span className="muted">Загрузка…</span>
+            : openTasks.length === 0 ? <span className="muted">{allTasks.length ? 'Всё сделано 🎉' : 'Задач пока нет'}</span>
+            : (
+              <span className="w-list">
+                {topTasks.map((t) => (
+                  <span key={t.id} className="w-task">
+                    {t.is_priority ? <Ico.flame size={14} className="warm" /> : <i className="w-dot" />}
+                    <span className="clip grow">{t.title}</span>
+                    {t.deadline && <span className="num muted" style={{ fontSize: 12 }}>{fmtDate(t.deadline)}</span>}
+                  </span>
+                ))}
+                {openTasks.length > 3 && <span className="muted" style={{ fontSize: 13 }}>и ещё {openTasks.length - 3}</span>}
+              </span>
+            )}
+        </Widget>
+      </div>
 
       <button className="link-quiet" onClick={() => setTour(true)}>Как пользоваться</button>
 
-      {checkin && <CheckIn me={me} setMe={setMe} onClose={() => setCheckin(false)} onError={b.setErr} />}
+      {checkin !== null && (
+        <CheckIn me={me} setMe={setMe} start={checkin >= 0 ? checkin : undefined}
+          onClose={() => setCheckin(null)} onError={b.setErr} />
+      )}
       {tour && <Tour onDone={endTour} />}
     </div>
   )

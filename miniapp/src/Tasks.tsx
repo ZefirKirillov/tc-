@@ -130,7 +130,7 @@ export default function Tasks() {
         </div>
       )}
 
-      <MainAction cfg={title.trim() ? { text: 'Добавить задачу', onClick: add, busy } : null} />
+      <MainAction float cfg={title.trim() ? { text: 'Добавить задачу', onClick: add, busy } : null} />
 
       {tasks.length === 0 ? (
         <div className="section">

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 // Thin wrapper over window.Telegram.WebApp. Every call is guarded so the app
 // still runs in a plain browser (dev mode) where platform === 'unknown'.
@@ -189,3 +189,26 @@ export function cloudSet(key: string, value: string) {
 export function startParam(): string | null {
   try { return new URLSearchParams(window.location.search).get('tab') } catch { return null }
 }
+
+// ---------- typing ----------
+
+/** Hide the island while typing — on phones it would ride up on the keyboard. */
+function isTextField(t: EventTarget | null): boolean {
+  return t instanceof HTMLTextAreaElement ||
+    (t instanceof HTMLInputElement && !['checkbox', 'radio', 'button', 'file', 'date'].includes(t.type))
+}
+
+export function useTyping(): boolean {
+  // Start from the current focus: a screen may mount with an autofocused field.
+  const [typing, setTyping] = useState(() => isTextField(document.activeElement))
+  useEffect(() => {
+    const isField = isTextField
+    const on = (e: FocusEvent) => { if (isField(e.target)) setTyping(true) }
+    const off = (e: FocusEvent) => { if (isField(e.target)) setTyping(false) }
+    document.addEventListener('focusin', on)
+    document.addEventListener('focusout', off)
+    return () => { document.removeEventListener('focusin', on); document.removeEventListener('focusout', off) }
+  }, [])
+  return typing
+}
+

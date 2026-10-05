@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, keep, peek } from './api'
 import { Ico } from './icons'
 import MainAction from './MainAction'
 import { haptic } from './tg'
 import { Empty, Section, Skeletons, useBanner } from './ui'
 
-export default function AI() {
+export default function AI({ initialQuestion, onConsumed }: { initialQuestion?: string; onConsumed?: () => void } = {}) {
   const b = useBanner()
   const [q, setQ] = useState('')
   const [answer, setAnswerRaw] = useState<string | null>(() => peek('ai') ?? null)
@@ -14,14 +14,24 @@ export default function AI() {
   const [loading, setLoading] = useState(() => peek('ai') === undefined)
 
   const setAnswer = (a: string | null) => setAnswerRaw(keep('ai', a))
+  // Once a new question is asked, the slower «last answer» load must not overwrite it.
+  const askedRef = useRef(false)
 
+  // A question typed on «Обзор» arrives here and is asked right away.
   useEffect(() => {
-    api.aiLast().then((r) => { if (r.answer) setAnswer(r.answer) }).catch(() => {}).finally(() => setLoading(false))
+    if (!initialQuestion) return
+    onConsumed?.()
+    ask(false, initialQuestion)
   }, [])
 
-  async function ask(advice = false) {
-    const question = q.trim()
+  useEffect(() => {
+    api.aiLast().then((r) => { if (r.answer && !askedRef.current) setAnswer(r.answer) }).catch(() => {}).finally(() => setLoading(false))
+  }, [])
+
+  async function ask(advice = false, text?: string) {
+    const question = (text ?? q).trim()
     if ((!advice && question.length < 3) || busy) return
+    askedRef.current = true
     setBusy(true)
     b.clear()
     haptic('medium')
@@ -53,7 +63,7 @@ export default function AI() {
         <textarea value={q} onChange={(e) => setQ(e.target.value)} placeholder="Например: как восстановиться после тяжёлой тренировки ног?"
           className="field" style={{ minHeight: 88 }} maxLength={2000} disabled={busy} />
         {q.length > 1500 && <div className="row-meta num" style={{ textAlign: 'right' }}>{q.length}/2000</div>}
-        <MainAction cfg={q.trim() ? { text: 'Спросить CheckAI', onClick: () => ask(), busy, disabled: q.trim().length < 3 } : null} />
+        <MainAction float cfg={q.trim() ? { text: 'Спросить CheckAI', onClick: () => ask(), busy, disabled: q.trim().length < 3 } : null} />
       </Section>
 
       <Section label={label}>

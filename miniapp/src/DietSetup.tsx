@@ -189,7 +189,7 @@ export default function DietSetup({ onDone }: { onDone: () => void }) {
       {!inTelegram && step > 0 && step < 4 && (
         <button onClick={() => setStep(step - 1)} className="btn btn-quiet mt"><Ico.back size={16} /> Назад</button>
       )}
-      <MainAction cfg={main} />
+      <MainAction cfg={main} float />
     </div>
   )
 }

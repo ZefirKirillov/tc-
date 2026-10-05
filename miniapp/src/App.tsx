@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, keep } from './api'
 import { Ico, type IconName } from './icons'
-import { hapticSelect, startParam, useBackButton } from './tg'
+import { hapticSelect, startParam, useBackButton, useTyping } from './tg'
 import { LoadError, Skeleton, useOnline } from './ui'
 import Dashboard from './Dashboard'
 import Tasks from './Tasks'
@@ -39,28 +39,14 @@ function greeting(name?: string): string {
   return n && n !== 'друг' ? `${hello}, ${n}` : hello
 }
 
-/** Hide the island while typing — on phones it would ride up on the keyboard. */
-function useTyping(): boolean {
-  const [typing, setTyping] = useState(false)
-  useEffect(() => {
-    const isField = (t: EventTarget | null) =>
-      t instanceof HTMLTextAreaElement ||
-      (t instanceof HTMLInputElement && !['checkbox', 'radio', 'button', 'file', 'date'].includes(t.type))
-    const on = (e: FocusEvent) => { if (isField(e.target)) setTyping(true) }
-    const off = (e: FocusEvent) => { if (isField(e.target)) setTyping(false) }
-    document.addEventListener('focusin', on)
-    document.addEventListener('focusout', off)
-    return () => { document.removeEventListener('focusin', on); document.removeEventListener('focusout', off) }
-  }, [])
-  return typing
-}
-
 export default function App() {
   const [me, setMe] = useState<any>(null)
   const [loadErr, setLoadErr] = useState<unknown>(null)
   const [tab, setTab] = useState<Tab>(INITIAL_TAB)
   // ?tab=checkin opens the check-in sheet once — not again on every return to "Обзор".
   const [deepCheckin, setDeepCheckin] = useState(DEEP === 'checkin')
+  // Question typed into the CheckAI field on «Обзор» → asked on the CheckAI screen.
+  const [pendingAsk, setPendingAsk] = useState('')
   const online = useOnline()
   const typing = useTyping()
 
@@ -105,11 +91,12 @@ export default function App() {
   } else {
     body = (
       <div className="screen" key={tab}>
-        {tab === 'main' && <Dashboard me={me} setMe={setMe} go={switchTab} openCheckin={deepCheckin} />}
+        {tab === 'main' && <Dashboard me={me} setMe={setMe} go={switchTab} openCheckin={deepCheckin}
+          askAI={(q) => { setPendingAsk(q); switchTab('ai') }} />}
         {tab === 'workout' && <Workout />}
         {tab === 'tasks' && <Tasks />}
         {tab === 'diet' && <Diet />}
-        {tab === 'ai' && <AI />}
+        {tab === 'ai' && <AI initialQuestion={pendingAsk} onConsumed={() => setPendingAsk('')} />}
         {tab === 'stats' && <Stats />}
       </div>
     )
@@ -128,6 +115,7 @@ export default function App() {
         </div>
       )}
       {body}
+      <div id="fab-slot" />
       {me && (
         <nav className={`nav${typing ? ' is-hidden' : ''}`} aria-label="Разделы" data-tour="nav">
           {TABS.map(([k, icon, label]) => {
