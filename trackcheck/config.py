@@ -11,7 +11,31 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # Public HTTPS base of this Render service, e.g. https://trackcheckv2.onrender.com
 # Used for web_app buttons. Override with MINIAPP_BASE_URL env if different.
 MINIAPP_BASE_URL = os.getenv("MINIAPP_BASE_URL", "https://trackcheckv2.onrender.com")
-MINIAPP_URL = f"{MINIAPP_BASE_URL.rstrip('/')}/app"
+
+
+def _miniapp_build_id() -> str:
+    """Hash of the current Mini App bundle (from the built index.html), e.g. "HzCEvcIv".
+    Put into the Mini App URL so each deploy gets a URL Telegram has never cached —
+    otherwise its in-app browser can keep showing the previous version."""
+    import re
+    index = os.path.join(os.path.dirname(__file__), "web", "static", "index.html")
+    try:
+        with open(index, encoding="utf-8") as f:
+            m = re.search(r"assets/index-([\w-]+)\.js", f.read())
+        return m.group(1) if m else ""
+    except OSError:
+        return ""
+
+
+_BUILD_ID = _miniapp_build_id()
+MINIAPP_URL = f"{MINIAPP_BASE_URL.rstrip('/')}/app" + (f"?v={_BUILD_ID}" if _BUILD_ID else "")
+
+
+def miniapp_url(tab: str = "") -> str:
+    """Mini App link, optionally opening a specific tab (?tab=workout|diet|tasks|stats|ai|checkin)."""
+    if not tab:
+        return MINIAPP_URL
+    return f"{MINIAPP_URL}{'&' if '?' in MINIAPP_URL else '?'}tab={tab}"
 
 
 

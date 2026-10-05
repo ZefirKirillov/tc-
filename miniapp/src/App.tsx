@@ -12,31 +12,31 @@ import AI from './AI'
 
 export type Tab = 'main' | 'workout' | 'tasks' | 'diet' | 'ai' | 'stats'
 
-// Five tabs in the island (Apple HIG: 3–5). CheckAI is opened from "Сегодня".
+// Five tabs in the island (Apple HIG: 3–5). CheckAI is opened from "Обзор".
 const TABS: Array<[Tab, IconName, string]> = [
-  ['main', 'orbit', 'Сегодня'],
+  ['main', 'orbit', 'Обзор'],
   ['workout', 'dumbbell', 'Тренинг'],
   ['diet', 'food', 'Питание'],
   ['tasks', 'tasks', 'Задачи'],
   ['stats', 'chart', 'Прогресс'],
 ]
 const TITLES: Record<Tab, string> = {
-  main: 'Сегодня', workout: 'Тренировка', diet: 'Питание', tasks: 'Задачи', stats: 'Прогресс', ai: 'CheckAI',
+  main: 'Обзор', workout: 'Тренировка', diet: 'Питание', tasks: 'Задачи', stats: 'Прогресс', ai: 'CheckAI',
 }
 
 // Deep link from bot notifications: ?tab=workout | diet | tasks | stats | ai | checkin
 const DEEP = startParam()
 const INITIAL_TAB: Tab = DEEP && DEEP in TITLES ? (DEEP as Tab) : 'main'
 
+/** Title of the main screen: greeting by time of day + the user's name. */
 function greeting(name?: string): string {
   const h = new Date().getHours()
-  const hello = h >= 5 && h < 12 ? 'Доброе утро' : h >= 12 && h < 18 ? 'Добрый день' : h >= 18 && h < 23 ? 'Добрый вечер' : 'Доброй ночи'
-  return name && name !== 'друг' ? `${hello}, ${name}` : hello
-}
-
-function today(): string {
-  const s = new Intl.DateTimeFormat('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date())
-  return s.charAt(0).toUpperCase() + s.slice(1)
+  const hello = h >= 5 && h < 12 ? 'Доброе утро'
+    : h >= 12 && h < 18 ? 'Добрый день'
+    : h >= 18 && h < 23 ? 'Добрый вечер'
+    : 'Доброй ночи'
+  const n = (name ?? '').trim()
+  return n && n !== 'друг' ? `${hello}, ${n}` : hello
 }
 
 /** Hide the island while typing — on phones it would ride up on the keyboard. */
@@ -59,7 +59,7 @@ export default function App() {
   const [me, setMe] = useState<any>(null)
   const [loadErr, setLoadErr] = useState<unknown>(null)
   const [tab, setTab] = useState<Tab>(INITIAL_TAB)
-  // ?tab=checkin opens the check-in sheet once — not again on every return to "Сегодня".
+  // ?tab=checkin opens the check-in sheet once — not again on every return to "Обзор".
   const [deepCheckin, setDeepCheckin] = useState(DEEP === 'checkin')
   const online = useOnline()
   const typing = useTyping()
@@ -82,11 +82,11 @@ export default function App() {
       window.scrollTo(0, 0)
       return k
     })
-    // Counters on "Сегодня" (workouts, calories) change on other tabs — refresh silently.
+    // Counters on "Обзор" (workouts, calories) change on other tabs — refresh silently.
     if (k === 'main') api.me().then(setMe).catch(() => {})
   }, [])
 
-  // Telegram BackButton: from any tab back to "Сегодня" (sheets/sub-views override with higher priority).
+  // Telegram BackButton: from any tab back to "Обзор" (sheets/sub-views override with higher priority).
   useBackButton(tab !== 'main' ? () => switchTab('main') : null, 0)
 
   const navTab: Tab = tab === 'ai' ? 'main' : tab
@@ -117,15 +117,10 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="topbar" style={{ display: 'block' }}>
-        {tab === 'main' ? (
-          <>
-            <h1 className="topbar-title" style={{ margin: 0 }}>{me ? greeting(me.name) : 'TrackCheck'}</h1>
-            <div className="topbar-sub">{today()}</div>
-          </>
-        ) : (
-          <h1 className="topbar-title" style={{ margin: 0 }}>{TITLES[tab]}</h1>
-        )}
+      <header className="topbar">
+        <h1 className="topbar-title wrap" style={{ margin: 0 }}>
+          {tab === 'main' && me ? greeting(me.name) : TITLES[tab]}
+        </h1>
       </header>
       {!online && (
         <div className="banner banner--offline" role="status">

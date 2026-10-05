@@ -470,9 +470,9 @@ def build_template_text(ctx: dict) -> str:
 
 def notify_keyboard(ctx: dict, topic: Optional[str] = None):
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
-    from trackcheck.config import MINIAPP_URL
+    from trackcheck.config import miniapp_url
     label, tab = _CTA.get(topic or pick_topic(ctx), _CTA["fallback"])
-    url = f"{MINIAPP_URL}?tab={tab}" if tab else MINIAPP_URL
+    url = miniapp_url(tab or "")
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=label, web_app=WebAppInfo(url=url))],
         [InlineKeyboardButton(text="🔕 До утра", callback_data="notify_mute")],

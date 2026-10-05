@@ -5,7 +5,7 @@ import { haptic, hapticSelect, notifyOk } from './tg'
 import { Sheet } from './ui'
 
 export const CATS: Array<[string, string, IconName, string]> = [
-  // key (API), label, icon, question — order matches the ring on "Сегодня"
+  // key (API), label, icon, question — order matches the ring on "Обзор"
   ['сон', 'Сон', 'sleep', 'Как спалось?'],
   ['еда', 'Еда', 'food', ''],
   ['активность', 'Активность', 'activity', ''],

@@ -370,7 +370,7 @@ export default function Workout() {
 
       <div className="hstack spread" style={{ marginBottom: 10 }}>
         <span className="muted clip" style={{ fontSize: 14 }}>
-          Неделя <span className="num accent">{fmt(wp?.done ?? 0)}/{fmt(wp?.goal ?? 0)}</span>
+          Неделя <span className="num accent">{fmt(wp?.done ?? 0)}{wp?.goal ? `/${fmt(wp.goal)}` : ''}</span>
           {data.next && <> · следующая {data.next.day.toLowerCase()}, {data.next.date}</>}
         </span>
         <button className="btn btn-ghost btn-sm btn-icon" aria-label="Ещё: история, ревью, новый план"

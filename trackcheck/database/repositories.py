@@ -303,31 +303,42 @@ def get_or_create_workout_data(user_id: int) -> dict:
 
 
 
+def _plan_start(plan_data: dict, fallback):
+    try:
+        return datetime.strptime((plan_data or {}).get("start_date") or "", "%Y-%m-%d").date()
+    except Exception:
+        return fallback
+
+
+def is_planned_training_day(plan_data: dict, d, start) -> bool:
+    """Есть ли в плане упражнения на дату d. Неделя цикла — по тому же правилу,
+    что get_current_week_session_key (недели считаются от даты старта плана)."""
+    plan = (plan_data or {}).get("plan") or {}
+    if not isinstance(plan, dict) or d < start:
+        return False
+    cycle_weeks = plan_data.get("cycle_weeks", plan.get("cycle_weeks", 1)) or 1
+    week_idx = (max(0, (d - start).days // 7) % cycle_weeks) + 1
+    week = plan.get(f"week_{week_idx}") or plan.get("week_1") or {}
+    exercises = week.get(WEEKDAY_KEY[d.weekday()]) if isinstance(week, dict) else None
+    return isinstance(exercises, list) and len(exercises) > 0
+
+
+def count_planned_days(plan_data: dict, first, last) -> int:
+    """Тренировочные дни по плану в диапазоне дат [first, last] (с даты старта плана)."""
+    start = _plan_start(plan_data, first)
+    n, d = 0, first
+    while d <= last:
+        if is_planned_training_day(plan_data, d, start):
+            n += 1
+        d += timedelta(days=1)
+    return n
+
+
 def count_planned_days_in_month(plan_data: dict, year: int, month: int) -> int:
-    """Сколько тренировочных дней план даёт в этом месяце (с даты старта плана).
-    Неделя цикла для каждой даты — по тому же правилу, что get_current_week_session_key."""
     import calendar
     from datetime import date as _date
-    plan = (plan_data or {}).get("plan") or {}
-    if not isinstance(plan, dict):
-        return 0
-    cycle_weeks = plan_data.get("cycle_weeks", plan.get("cycle_weeks", 1)) or 1
-    first = _date(year, month, 1)
-    try:
-        start = datetime.strptime(plan_data.get("start_date") or "", "%Y-%m-%d").date()
-    except Exception:
-        start = first
-    count = 0
-    for day in range(1, calendar.monthrange(year, month)[1] + 1):
-        d = _date(year, month, day)
-        if d < start:
-            continue
-        week_idx = (max(0, (d - start).days // 7) % cycle_weeks) + 1
-        week = plan.get(f"week_{week_idx}") or plan.get("week_1") or {}
-        exercises = week.get(WEEKDAY_KEY[d.weekday()]) if isinstance(week, dict) else None
-        if isinstance(exercises, list) and exercises:
-            count += 1
-    return count
+    return count_planned_days(plan_data, _date(year, month, 1),
+                              _date(year, month, calendar.monthrange(year, month)[1]))
 
 
 def get_monthly_workout_goal(user_id: int, stored_goal: int = 0) -> int:
@@ -873,12 +884,17 @@ def get_next_training_day(plan_data: dict, user_id: Optional[int] = None) -> Opt
 
 
 def get_weekly_workout_progress(user_id: int) -> tuple:
-    """Возвращает (выполнено, план) тренировок за текущую неделю."""
+    """Возвращает (выполнено, план) тренировок за текущую неделю.
+    План — реальные тренировочные дни этой недели по расписанию (а не ответ мастера
+    «дней в неделю», который у ручных/старых планов бывает 0 или не совпадает)."""
     plan_data = get_ai_plan(user_id)
-    days_per_week = plan_data['days_per_week'] if plan_data else 0
     # Считаем начало недели (понедельник)
     today = user_today_date(user_id)
     week_start = today - timedelta(days=today.weekday())
+    days_per_week = 0
+    if plan_data:
+        days_per_week = (count_planned_days(plan_data, week_start, week_start + timedelta(days=6))
+                         or plan_data.get('days_per_week') or 0)
     week_start_str = week_start.strftime('%Y-%m-%d')
     cursor = db.execute(
         "SELECT COUNT(*) FROM ai_workout_sessions WHERE user_id = ? AND date >= ? AND status = 'done'",
