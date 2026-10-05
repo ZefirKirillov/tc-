@@ -39,6 +39,10 @@ RU_ERRORS = {
     "bad_weight": "Вес: число от 20 до 400 кг.",
     "bad_fat": "Процент жира: число от 1 до 70.",
     "bad_text": "Текст слишком короткий или пустой.",
+    "auto_category": "Еда и активность оцениваются автоматически — по калориям и тренировке.",
+    "no_diet_profile": "Сначала задай норму калорий.",
+    "bad_profile": "Проверь данные: вес 20–300 кг, рост 100–250 см, возраст 10–120.",
+    "bad_target": "Цель: от 0,1 до 100 кг за 7–730 дней.",
 }
 
 
@@ -139,6 +143,9 @@ async def api_ratings_post(request: web.Request):
     valid = ("сон", "еда", "активность", "зависание", "настрой")
     if category not in valid or not (1 <= rating <= 10):
         return web.json_response({"ok": False, "error": "bad_params"}, status=400)
+    from trackcheck.services.tracker_service import AUTO_CATEGORIES
+    if category in AUTO_CATEGORIES:
+        return _err("auto_category")
     tg = request["tg_user"]
     first = tg.get("first_name", "") or ""
     uname = tg.get("username", "") or ""
@@ -264,11 +271,17 @@ async def api_diet_log_post(request: web.Request):
     meal = (body.get("meal") or "Еда").strip()[:50]
 
     def _save():
+        from trackcheck.database.repositories import get_diet_profile, get_today_calories as _c
+        from trackcheck.services.tracker_service import sync_diet_rating_for_today
+        if not get_diet_profile(user_id):
+            return None  # дневник питания работает только с заданной нормой калорий
         save_food_log(user_id, meal, description, calories)
-        from trackcheck.database.repositories import get_today_calories as _c
+        sync_diet_rating_for_today(user_id)
         return {"today_calories": _c(user_id)}
 
     result = await run_db(_save)
+    if result is None:
+        return _err("no_diet_profile")
     return web.json_response({"ok": True, "data": result})
 
 
@@ -419,6 +432,8 @@ async def api_workout_finish(request: web.Request):
             update_streak(user_id)
         else:
             ok, rank_up, new_rank = False, False, None
+        from trackcheck.services.tracker_service import sync_activity_rating_for_today
+        sync_activity_rating_for_today(user_id)
         logs = get_session_exercise_logs(session_id)
         done = sum(1 for l in logs if l["status"] == "done")
         skipped = sum(1 for l in logs if l["status"] == "skipped")
@@ -637,12 +652,68 @@ async def api_body_post(request: web.Request):
 
 
 @require_user
+async def api_diet_profile_post(request: web.Request):
+    """Calorie goal setup — same questions, ranges and formulas as the bot's diet setup
+    (Mifflin–St Jeor × activity, goal adjustment with safety limits).
+    {weight, height, age, gender: male|female, activity, goal: loss|maintain|gain,
+     change?, days?, preview?: bool} → {daily_calories, warning, saved}"""
+    import math
+    from trackcheck.database.repositories import (
+        calculate_bmr, calculate_tdee, calculate_daily_calories, save_diet_profile,
+    )
+    user_id = request["tg_user"]["id"]
+    try:
+        body = await request.json()
+    except Exception:
+        return _err("bad_json")
+    try:
+        weight = float(body.get("weight"))
+        height = float(body.get("height"))
+        age = int(body.get("age"))
+        activity = float(body.get("activity"))
+    except (TypeError, ValueError):
+        return _err("bad_profile")
+    gender = {"male": "мужской", "female": "женский"}.get(body.get("gender"))
+    goal = body.get("goal")
+    if (not all(math.isfinite(x) for x in (weight, height, activity))
+            or not 20 <= weight <= 300 or not 100 <= height <= 250 or not 10 <= age <= 120
+            or gender is None or activity not in (1.2, 1.375, 1.55, 1.725, 1.9)
+            or goal not in ("loss", "maintain", "gain")):
+        return _err("bad_profile")
+    change, days = 0.0, 30
+    if goal != "maintain":
+        try:
+            change = float(body.get("change"))
+            days = int(body.get("days"))
+        except (TypeError, ValueError):
+            return _err("bad_target")
+        if not math.isfinite(change) or not 0.1 <= change <= 100 or not 7 <= days <= 730:
+            return _err("bad_target")
+
+    def _calc_and_save():
+        tdee = calculate_tdee(calculate_bmr(weight, height, age, gender), activity)
+        daily, warning = calculate_daily_calories(tdee, goal, change, days, gender)
+        if not body.get("preview"):
+            save_diet_profile(user_id=user_id, weight=weight, height=height, age=age, gender=gender,
+                              activity_level=activity, goal_type=goal, target_weight_change=change,
+                              target_days=days, daily_calories=daily)
+        return {"daily_calories": round(daily), "warning": None if warning == "ok" else warning,
+                "saved": not body.get("preview")}
+
+    data = await run_db(_calc_and_save)
+    return web.json_response({"ok": True, "data": data})
+
+
+@require_user
 async def api_diet_photo(request: web.Request):
     """Analyze food photo → {description, calories}. Does NOT log — client confirms first."""
     import io
     import re
     from trackcheck.utils.concurrency import run_in_thread
     from trackcheck.services.ai_service import analyze_food_photo
+    from trackcheck.database.repositories import get_diet_profile
+    if not await run_db(get_diet_profile, request["tg_user"]["id"]):
+        return _err("no_diet_profile")
     try:
         post = await request.post()
     except Exception:
@@ -913,6 +984,7 @@ def create_api_app() -> web.Application:
     app.router.add_get("/api/diet", api_diet_get)
     app.router.add_post("/api/diet/log", api_diet_log_post)
     app.router.add_post("/api/diet/photo", api_diet_photo)
+    app.router.add_post("/api/diet/profile", api_diet_profile_post)
     app.router.add_get("/api/body", api_body_get)
     app.router.add_post("/api/body", api_body_post)
     app.router.add_get("/api/stats", api_stats_get)

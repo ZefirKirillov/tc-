@@ -153,3 +153,39 @@ export function useBackButton(handler: (() => void) | null, priority = 1) {
   }, [active, priority])
   return inTelegram
 }
+
+// ---------- persistent flags (tutorial seen, …) ----------
+// Telegram CloudStorage follows the user across devices; localStorage is the fallback.
+
+function localGet(key: string): string | null {
+  try { return window.localStorage.getItem(key) } catch { return null }
+}
+function localSet(key: string, value: string) {
+  try { window.localStorage.setItem(key, value) } catch { /* private mode */ }
+}
+
+export function cloudGet(key: string): Promise<string | null> {
+  const local = localGet(key)
+  const cs = inTelegram && atLeast('6.9') ? tg.CloudStorage : null
+  if (!cs || local) return Promise.resolve(local)
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => resolve(local), 1500)
+    try {
+      cs.getItem(key, (err: unknown, value?: string) => {
+        window.clearTimeout(timer)
+        resolve(err ? local : (value || local || null))
+      })
+    } catch { window.clearTimeout(timer); resolve(local) }
+  })
+}
+
+export function cloudSet(key: string, value: string) {
+  localSet(key, value)
+  try { if (inTelegram && atLeast('6.9')) tg.CloudStorage.setItem(key, value) } catch { /* noop */ }
+}
+
+// ---------- deep link ----------
+/** ?tab=workout|diet|tasks|stats|ai|checkin — used by bot notifications. */
+export function startParam(): string | null {
+  try { return new URLSearchParams(window.location.search).get('tab') } catch { return null }
+}

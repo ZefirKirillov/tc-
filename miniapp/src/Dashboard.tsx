@@ -1,21 +1,17 @@
-import { useState } from 'react'
-import { api } from './api'
+import { useEffect, useState } from 'react'
+import { api, keep, peek } from './api'
 import type { Tab } from './App'
+import CheckIn, { CATS, MANUAL } from './CheckIn'
 import { Ico, type IconName } from './icons'
-import { haptic, notifyOk } from './tg'
-import { fmt, Meter, Section, useBanner } from './ui'
+import { cloudGet, cloudSet, hapticSelect } from './tg'
+import Tour from './Tour'
+import { fmt, Meter, plural, Section, useBanner } from './ui'
 
-const CATS: Array<[string, string, IconName]> = [
-  ['сон', 'Сон', 'sleep'],
-  ['еда', 'Еда', 'food'],
-  ['активность', 'Активность', 'activity'],
-  ['зависание', 'Зависание', 'idle'],
-  ['настрой', 'Настрой', 'target'],
-]
+const TOUR_KEY = 'tc_tour_v1'
 
 // ---------- orbital status instrument ----------
 
-const SIZE = 148
+const SIZE = 132
 const C0 = SIZE / 2
 
 function Ring({ r, w, p, color }: { r: number; w: number; p: number; color: string }) {
@@ -35,145 +31,148 @@ function Ring({ r, w, p, color }: { r: number; w: number; p: number; color: stri
 function Orbit({ rated, workouts, kcal, streak }: {
   rated: boolean[]; workouts: number; kcal: number | null; streak: number
 }) {
-  const r1 = 66, w1 = 7
+  const r1 = 59, w1 = 7
   const c1 = 2 * Math.PI * r1
   const seg = (64 / 360) * c1 // 5 segments × 72°, 8° gaps
   const allRated = rated.every(Boolean)
   return (
     <svg className="orbit" viewBox={`0 0 ${SIZE} ${SIZE}`} role="img"
       aria-label={`Чек-ин ${rated.filter(Boolean).length} из 5, серия ${streak} дней`}>
-      {[0, 90, 180, 270].map((a) => (
-        <line key={a} className="orbit-tick" x1={C0} y1={1} x2={C0} y2={4} transform={`rotate(${a} ${C0} ${C0})`} />
-      ))}
       {rated.map((on, i) => (
         <circle key={i} className="orbit-arc" cx={C0} cy={C0} r={r1} strokeWidth={w1}
           stroke={on ? (allRated ? 'var(--warm)' : 'var(--accent)') : 'var(--surface-2)'}
           strokeDasharray={`${seg} ${c1}`} strokeLinecap="butt"
           transform={`rotate(${-90 + i * 72 + 4} ${C0} ${C0})`} />
       ))}
-      <Ring r={54} w={5} p={workouts} color={workouts >= 1 ? 'var(--warm)' : 'var(--metal)'} />
+      <Ring r={48} w={5} p={workouts} color={workouts >= 1 ? 'var(--warm)' : 'var(--metal)'} />
       {kcal != null
-        ? <Ring r={44} w={5} p={kcal} color={kcal > 1.1 ? 'var(--danger)' : 'var(--accent-dim)'} />
-        : <circle cx={C0} cy={C0} r={44} fill="none" stroke="var(--line-strong)" strokeWidth={1} strokeDasharray="2 4" />}
-      <text x={C0} y={C0 + 4} textAnchor="middle" className="num"
-        style={{ fontSize: streak > 999 ? 20 : 28, fontWeight: 600, fill: streak > 0 ? 'var(--warm)' : 'var(--text-3)' }}>
-        {streak > 99999 ? '99k+' : streak}
-      </text>
-      <text x={C0} y={C0 + 20} textAnchor="middle" className="label" style={{ fill: 'var(--text-3)', fontSize: 9 }}>
-        дн. серия
-      </text>
+        ? <Ring r={39} w={5} p={kcal} color={kcal > 1.1 ? 'var(--danger)' : 'var(--accent-dim)'} />
+        : <circle cx={C0} cy={C0} r={39} fill="none" stroke="var(--line-strong)" strokeWidth={1} strokeDasharray="2 4" />}
+      <g transform={`translate(${C0 - 11} ${C0 - 13})`} style={{ color: streak > 0 ? 'var(--warm)' : 'var(--text-3)' }}>
+        <path d="M11 24c4.2 0 7-2.8 7-6.8 0-4.9-4-7.2-5.1-11.9-2.3 1.6-3.9 4.2-3.6 7.2-1.2-.7-2-1.9-2.2-3.3C5.3 11 4 13.7 4 17.2 4 21.2 6.8 24 11 24z"
+          fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinejoin="round" />
+      </g>
     </svg>
+  )
+}
+
+// ---------- today list ----------
+
+function workoutStatus(w: any): { sub: string; done: boolean } {
+  if (!w) return { sub: 'Загрузка…', done: false }
+  if (!w.has_plan) return { sub: 'Создай план — это пара минут', done: false }
+  const exs: any[] = w.today_exercises ?? []
+  if (w.is_rest_day || exs.length === 0) return { sub: 'Сегодня отдых', done: true }
+  if (w.session?.status === 'done') return { sub: 'Готово', done: true }
+  if (w.session) {
+    const n = (w.logs ?? []).length
+    return { sub: `В процессе · ${n} из ${exs.length}`, done: false }
+  }
+  return { sub: `${exs.length} ${plural(exs.length, 'упражнение', 'упражнения', 'упражнений')}`, done: false }
+}
+
+function Cell({ icon, tone, title, sub, done, onClick, tour }: {
+  icon: IconName; tone?: 'metal' | 'warm'; title: string; sub: string; done?: boolean; onClick: () => void; tour?: string
+}) {
+  const Icon = Ico[icon]
+  return (
+    <button className="cell" onClick={() => { hapticSelect(); onClick() }} data-tour={tour}>
+      <span className={`cell-icon${tone ? ` is-${tone}` : ''}`}><Icon size={20} /></span>
+      <span className="grow">
+        <span className="cell-title" style={{ display: 'block' }}>{title}</span>
+        <span className="cell-sub clip" style={{ display: 'block' }}>{sub}</span>
+      </span>
+      {done ? <Ico.check size={20} className="cell-done" /> : <Ico.arrow size={16} className="cell-chev" />}
+    </button>
   )
 }
 
 // ---------- screen ----------
 
-export default function Dashboard({ me, setMe, go }: { me: any; setMe: any; go: (t: Tab) => void }) {
+export default function Dashboard({ me, setMe, go, openCheckin }: {
+  me: any; setMe: any; go: (t: Tab) => void; openCheckin?: boolean
+}) {
   const b = useBanner()
-  const [pending, setPending] = useState<string | null>(null)
+  const [checkin, setCheckin] = useState(!!openCheckin)
+  const [tour, setTour] = useState(false)
+  const [workout, setWorkout] = useState<any>(() => peek('workout') ?? null)
+  const [tasks, setTasks] = useState<any[] | null>(() => peek('tasks') ?? null)
 
-  async function rate(cat: string, val: number) {
-    setPending(cat)
-    haptic()
-    try {
-      const res = await api.saveRating(cat, val)
-      setMe((m: any) => ({ ...m, today_ratings: res.ratings }))
-      if (res.spark_awarded) {
-        notifyOk()
-        b.setOk('Искра зажжена — все категории дня заполнены.', 'event')
-      }
-    } catch (e) {
-      b.setErr(e)
-    } finally {
-      setPending(null)
-    }
+  useEffect(() => {
+    api.workout().then((d) => setWorkout(keep('workout', d))).catch(() => {})
+    api.tasks().then((t) => setTasks(keep('tasks', t))).catch(() => {})
+    // First visit → tutorial (not on top of a deep-linked check-in).
+    if (!openCheckin) cloudGet(TOUR_KEY).then((v) => { if (!v) setTour(true) })
+  }, [])
+
+  function endTour() {
+    setTour(false)
+    cloudSet(TOUR_KEY, '1')
   }
 
   const ratings = me.today_ratings ?? {}
   const rated = CATS.map(([k]) => (ratings[k] ?? 0) > 0)
   const ratedN = rated.filter(Boolean).length
+  const manualN = MANUAL.filter(([k]) => (ratings[k] ?? 0) > 0).length
 
   const wDone = me.workout?.current_count ?? 0
   const wGoal = me.workout?.monthly_goal ?? 0
   const dietOn = !!me.diet?.configured && (me.diet?.daily_goal ?? 0) > 0
-  const kcal = me.diet?.today_calories ?? 0
-  const kcalGoal = me.diet?.daily_goal ?? 0
+  const kcal = Math.round(me.diet?.today_calories ?? 0)
+  const kcalGoal = Math.round(me.diet?.daily_goal ?? 0)
 
+  const streak = me.streak ?? 0
   const sparks = me.rank?.total_sparks ?? 0
   const nextTotal = me.rank?.next_total
   const maxRank = nextTotal == null || nextTotal <= sparks
+
+  const ws = workoutStatus(workout)
+  const openTasks = tasks?.filter((t) => !t.is_done).length
 
   return (
     <div>
       {b.BannerEl}
 
-      <div className="station">
-        <Orbit rated={rated} streak={me.streak ?? 0}
+      <div className="hero" data-tour="hero">
+        <Orbit rated={rated} streak={streak}
           workouts={wGoal > 0 ? wDone / wGoal : 0}
           kcal={dietOn ? kcal / kcalGoal : null} />
-        <div className="readouts">
-          <div className="readout">
-            <div className="label"><i className="dot" style={{ background: ratedN === 5 ? 'var(--warm)' : 'var(--accent)' }} />Чек-ин</div>
-            <div className="readout-val num">{ratedN}<small>/5</small></div>
+        <div style={{ minWidth: 0 }}>
+          <div className={`hero-streak num${streak > 0 ? ' warm' : ' muted'}`}>
+            {fmt(streak)}<small>{plural(streak, 'день', 'дня', 'дней')} подряд</small>
           </div>
-          <div className="readout">
-            <div className="label"><i className="dot" style={{ background: wGoal > 0 && wDone >= wGoal ? 'var(--warm)' : 'var(--metal)' }} />Тренировки</div>
-            <div className="readout-val num clip">{fmt(wDone)}<small>/{fmt(wGoal)}</small></div>
+          <div className="rankline-top">
+            <span className="wrap" style={{ fontWeight: 600, fontSize: 14 }}>{me.rank?.emoji} {me.rank?.name}</span>
           </div>
-          <div className="readout">
-            <div className="label"><i className="dot" style={{ background: dietOn ? (kcalGoal > 0 && kcal / kcalGoal > 1.1 ? 'var(--danger)' : 'var(--accent-dim)') : 'var(--line-strong)' }} />Ккал</div>
-            {dietOn
-              ? <div className="readout-val num clip">{fmt(Math.round(kcal))}<small>/{fmt(Math.round(kcalGoal))}</small></div>
-              : <div className="readout-val muted" style={{ fontSize: 13 }}>не настроено</div>}
+          <Meter value={sparks} max={maxRank ? sparks || 1 : nextTotal} tone="warm" />
+          <div className="label" style={{ marginTop: 6 }}>
+            {maxRank ? `${fmt(sparks)} искр · максимальный ранг` : `${fmt(sparks)} из ${fmt(nextTotal)} искр до ранга`}
           </div>
         </div>
       </div>
 
-      <div className="rankline">
-        <div className="rankline-top">
-          <span className="wrap" style={{ fontWeight: 600 }}>{me.rank?.emoji} {me.rank?.name}</span>
-          <span className="num warm" style={{ fontSize: 13, flex: 'none' }}>
-            <Ico.spark size={13} /> {fmt(sparks)}{maxRank ? '' : <span className="muted">/{fmt(nextTotal)}</span>}
-          </span>
-        </div>
-        <Meter value={sparks} max={maxRank ? sparks || 1 : nextTotal} tone="warm" />
-      </div>
-
-      <button className="cta" onClick={() => go('workout')}>
-        <Ico.dumbbell size={22} className="cta-icon" />
-        <span className="grow">
-          <span style={{ fontWeight: 600, display: 'block' }}>Тренировка на сегодня</span>
-          <span className="row-meta">Начать или отметить упражнения</span>
-        </span>
-        <Ico.arrow size={18} className="accent" />
-      </button>
-
-      <Section label="Чек-ин дня" aux={<span className={`num ${ratedN === 5 ? 'warm' : 'muted'}`} style={{ fontSize: 12 }}>{ratedN}/5</span>}>
-        <div className="rows">
-          {CATS.map(([key, label, icon]) => {
-            const cur = ratings[key] ?? 0
-            const Icon = Ico[icon]
-            return (
-              <div key={key} className="rate">
-                <div className="rate-head">
-                  <Icon size={18} />
-                  <span className="grow">{label}</span>
-                  <span className={`rate-val num${cur ? '' : ' is-empty'}`}>{cur || '–'}</span>
-                </div>
-                <div className={`scale${pending === key ? ' is-busy' : ''}`} role="radiogroup" aria-label={label}>
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => (
-                    <button key={v} role="radio" aria-checked={cur === v} aria-label={`${label}: ${v}`}
-                      disabled={pending === key} onClick={() => rate(key, v)}
-                      className={`scale-step${v === cur ? ' is-cur' : v < cur ? ' is-fill' : ''}`}>
-                      {v}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )
-          })}
+      <Section label="План на сегодня">
+        <div className="cells" data-tour="today">
+          <Cell tour="checkin" icon="target" title="Чек-ин дня"
+            sub={ratedN === 5 ? 'Готово — искра зажжена'
+              : manualN === MANUAL.length ? 'Готово'
+              : manualN === 0 ? `${MANUAL.length} оценки · минута` : `${manualN} из ${MANUAL.length}`}
+            done={manualN === MANUAL.length} onClick={() => setCheckin(true)} />
+          <Cell icon="dumbbell" tone="metal" title="Тренировка" sub={ws.sub} done={ws.done} onClick={() => go('workout')} />
+          <Cell icon="food" title="Питание"
+            sub={dietOn ? `${fmt(kcal)} из ${fmt(kcalGoal)} ккал` : 'Задай норму калорий'}
+            onClick={() => go('diet')} />
+          <Cell icon="tasks" title="Задачи"
+            sub={openTasks == null ? 'Загрузка…' : tasks!.length === 0 ? 'Пока пусто' : openTasks === 0 ? 'Всё сделано' : `${openTasks} ${plural(openTasks, 'активная', 'активные', 'активных')}`}
+            done={openTasks === 0 && (tasks?.length ?? 0) > 0} onClick={() => go('tasks')} />
+          <Cell icon="ai" title="CheckAI" sub="Совет по твоим данным" onClick={() => go('ai')} />
         </div>
       </Section>
+
+      <button className="link-quiet" onClick={() => setTour(true)}>Как пользоваться</button>
+
+      {checkin && <CheckIn me={me} setMe={setMe} onClose={() => setCheckin(false)} onError={b.setErr} />}
+      {tour && <Tour onDone={endTour} />}
     </div>
   )
 }

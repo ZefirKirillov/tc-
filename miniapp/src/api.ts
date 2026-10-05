@@ -81,6 +81,8 @@ export const api = {
   logFood: (description: string, calories: number, meal = 'Еда') =>
     req('/api/diet/log', { method: 'POST', body: JSON.stringify({ description, calories, meal }) }),
   dietPhoto: (file: File) => reqPhoto('/api/diet/photo', file),
+  dietProfile: (profile: Record<string, unknown>) =>
+    req('/api/diet/profile', { method: 'POST', body: JSON.stringify(profile) }),
   body: () => req('/api/body'),
   saveBody: (weight: number | null, body_fat: number | null) =>
     req('/api/body', { method: 'POST', body: JSON.stringify({ weight, body_fat }) }),

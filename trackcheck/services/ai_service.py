@@ -22,7 +22,7 @@ from trackcheck.database.repositories import (
     get_today_calories, get_today_food_log, get_last_weight, get_tasks_for_today,
     get_user_name, db,
 )
-from trackcheck.utils.formatting import strip_markdown
+from trackcheck.utils.formatting import strip_markdown, workouts_progress
 
 
 NARA_BASE_URL = os.environ.get("NARA_BASE_URL", "https://router.bynara.id/v1").rstrip("/")
@@ -495,7 +495,7 @@ def get_full_context_for_ai(user_id: int) -> str:
     # --- Тренировки ---
     workouts = stats['workouts'] or {}
     lines.append(
-        f"Тренировки в этом месяце: {workouts.get('current_count', 0)}/{workouts.get('monthly_goal', 0)}"
+        f"Тренировки в этом месяце: {workouts_progress(workouts)}"
     )
     try:
         cursor = db.execute("""
@@ -917,7 +917,7 @@ def generate_weekly_report(user_id: int) -> str:
     prompt = f"""Составь разбор недели для {name}:
     Лучший день: {best_day} (средняя {avg_by_day.get(best_day, 0):.1f})
     Худший день: {worst_day} (средняя {avg_by_day.get(worst_day, 0):.1f})
-    Тренировок: {workout_data['current_count']}/{workout_data['monthly_goal']}
+    Тренировок: {workouts_progress(workout_data)}
     Средние за неделю: {stats['week_avg']}
 
     Напиши:
@@ -940,7 +940,7 @@ def generate_weekly_report(user_id: int) -> str:
 │ 📉 Худший день: {worst_day_str}
 │    Средняя оценка: {avg_by_day.get(worst_day, 0):.1f}/10
 │
-│ 🏋️ Тренировок: {workout_data['current_count']}/{workout_data['monthly_goal']}
+│ 🏋️ Тренировок: {workouts_progress(workout_data)}
 │
 │ 🤖 Анализ ИИ:
 │    {ai_analysis}

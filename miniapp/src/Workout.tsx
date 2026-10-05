@@ -3,7 +3,7 @@ import { api, keep, peek } from './api'
 import { Ico } from './icons'
 import MainAction from './MainAction'
 import { haptic, hapticSelect, inTelegram, notifyOk, useBackButton, type MainCfg } from './tg'
-import { Confirm, Empty, fmt, fmtDate, fmtWeight, LoadError, Section, Skeleton, Skeletons, useBanner } from './ui'
+import { Confirm, Empty, fmt, fmtDate, fmtWeight, LoadError, Section, Sheet, Skeleton, Skeletons, useBanner } from './ui'
 
 function exName(ex: any) {
   return ex.exercise ?? ex.name ?? '?'
@@ -81,7 +81,9 @@ export default function Workout() {
   const [idx, setIdx] = useState(() => sessionState(peek('workout')).idx)
   const [busy, setBusy] = useState(false)
   const [hist, setHist] = useState<any[] | null>(null)
-  const [showHist, setShowHist] = useState(false)
+  // Secondary tools live in one sheet: menu → history | review
+  const [tools, setTools] = useState<null | 'menu' | 'history' | 'review'>(null)
+  const [manual, setManual] = useState(false)
   const [wiz, setWiz] = useState<Wiz | null>(null)
   const [txt, setTxt] = useState('')
   const [confirmFinish, setConfirmFinish] = useState(false)
@@ -144,6 +146,7 @@ export default function Workout() {
       b.setOk(`Записано: ${resultText(r.result)}`)
       appendLog(ex, 'done', r.result)
       setTxt('')
+      setManual(false)
       setIdx(idx + 1)
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
@@ -168,11 +171,11 @@ export default function Workout() {
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
-  async function toggleHistory() {
-    if (showHist) { setShowHist(false); return }
-    setShowHist(true)
+  async function openHistory() {
+    hapticSelect()
+    setTools('history')
     try { setHist(await api.workoutHistory()) }
-    catch (e) { b.setErr(e); setShowHist(false) }
+    catch (e) { b.setErr(e); setTools(null) }
   }
 
   async function genPlan() {
@@ -208,12 +211,14 @@ export default function Workout() {
   }
 
   async function loadReview() {
+    hapticSelect()
     setReviewBusy(true)
+    setTools('review')
     try {
       const r = await api.workoutReview()
       setReview(r)
       setAccepted(new Set((r.changes ?? []).map((_: any, i: number) => i)))
-    } catch (e) { b.setErr(e) } finally { setReviewBusy(false) }
+    } catch (e) { b.setErr(e); setTools(null) } finally { setReviewBusy(false) }
   }
 
   async function applyReview() {
@@ -224,6 +229,7 @@ export default function Workout() {
     try {
       const r = await api.workoutApplyReview(acc)
       setReview(null)
+      setTools(null)
       notifyOk()
       b.setOk(`Применено замен: ${r.applied}`)
       await load()
@@ -250,12 +256,10 @@ export default function Workout() {
 
   let backHandler: (() => void) | null = null
   if (inWizard && (w.step > 0 || data?.has_plan)) backHandler = wizBack
-  else if (review) backHandler = () => setReview(null)
-  else if (showHist) backHandler = () => setShowHist(false)
   useBackButton(backHandler, 1)
 
   let main: MainCfg = null
-  if (confirmFinish || !data) main = null
+  if (confirmFinish || tools || !data) main = null
   else if (inWizard) {
     if (w.step === 3) main = { text: 'Сгенерировать план', onClick: genPlan, busy, disabled: !w.goal || !w.level }
     else if (w.step === 4) main = { text: 'Разобрать план', onClick: parseManual, busy, disabled: w.manual.trim().length < 10 }
@@ -263,7 +267,7 @@ export default function Workout() {
   } else if (!restDay && !sessionId && !finished && exs.length) {
     main = { text: `Начать тренировку · ${exs.length} упр.`, onClick: start, busy }
   } else if (active && !allMarked) {
-    main = txt.trim()
+    main = manual && txt.trim()
       ? { text: 'Записать результат', onClick: logText, busy }
       : { text: 'Сделал по плану', onClick: () => log('done'), busy }
   } else if (allMarked) {
@@ -364,9 +368,15 @@ export default function Workout() {
     <div>
       {b.BannerEl}
 
-      <div className="hstack spread" style={{ marginBottom: 6 }}>
-        <span className="label">Неделя <span className="num accent">{fmt(wp?.done ?? 0)}/{fmt(wp?.goal ?? 0)}</span></span>
-        {data.next && <span className="label clip">След.: {data.next.day}, {data.next.date}</span>}
+      <div className="hstack spread" style={{ marginBottom: 10 }}>
+        <span className="muted clip" style={{ fontSize: 14 }}>
+          Неделя <span className="num accent">{fmt(wp?.done ?? 0)}/{fmt(wp?.goal ?? 0)}</span>
+          {data.next && <> · следующая {data.next.day.toLowerCase()}, {data.next.date}</>}
+        </span>
+        <button className="btn btn-ghost btn-sm btn-icon" aria-label="Ещё: история, ревью, новый план"
+          onClick={() => { hapticSelect(); setTools('menu') }}>
+          <span style={{ fontSize: 18, lineHeight: 1, letterSpacing: 1 }}>•••</span>
+        </button>
       </div>
 
       {restDay && (
@@ -422,16 +432,21 @@ export default function Workout() {
                   <div className="target-cell"><span className="label">Вес</span><span className="num">{fmtWeight(exs[idx].weight)}</span></div>
                 )}
               </div>
-              <div className="field-row mt">
-                <input value={txt} onChange={(e) => setTxt(e.target.value)} className="field"
-                  placeholder="Факт: 80х5, 75х6…" maxLength={500} disabled={busy}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && txt.trim()) logText() }} />
-                <button onClick={() => log('skip')} disabled={busy} className="btn btn-ghost" aria-label="Пропустить упражнение">
-                  <Ico.skip size={16} /> Пропуск
+              {manual ? (
+                <div className="mt">
+                  <input value={txt} onChange={(e) => setTxt(e.target.value)} className="field" autoFocus
+                    placeholder="Как сделал: 80х5, 80х5, 75х6" maxLength={500} disabled={busy}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && txt.trim()) logText() }} />
+                  <div className="row-meta" style={{ marginTop: 6 }}>CheckAI разберёт подходы, повторы и вес.</div>
+                </div>
+              ) : null}
+              <div className="hstack mt" style={{ gap: 4, marginLeft: -8 }}>
+                <button onClick={() => log('skip')} disabled={busy} className="btn btn-quiet btn-sm">
+                  <Ico.skip size={15} /> Пропустить
                 </button>
-              </div>
-              <div className="row-meta" style={{ marginTop: 6 }}>
-                Пустое поле — записать по плану. Текст разберёт CheckAI.
+                <button onClick={() => { hapticSelect(); setManual(!manual); setTxt('') }} disabled={busy} className="btn btn-quiet btn-sm">
+                  <Ico.pen size={15} /> {manual ? 'По плану' : 'Записать вручную'}
+                </button>
               </div>
             </div>
           ) : (
@@ -440,6 +455,8 @@ export default function Workout() {
 
         </>
       )}
+
+      <MainAction cfg={main} />
 
       {(active || finished) && logs.length > 0 && (
         <Section label="Сессия" aux={<span className="num muted" style={{ fontSize: 12 }}>{logs.length}/{exs.length}</span>}>
@@ -461,72 +478,80 @@ export default function Workout() {
         </Section>
       )}
 
-      <MainAction cfg={main} />
-
-      <Section label="Инструменты">
-        <div className="btn-bar">
-          <button onClick={toggleHistory} className={`btn btn-ghost btn-sm${showHist ? ' is-on' : ''}`}>
-            <Ico.history size={16} /> {showHist ? 'Скрыть историю' : 'История'}
-          </button>
-          <button onClick={() => (review ? setReview(null) : loadReview())} className="btn btn-ghost btn-sm" disabled={reviewBusy}>
-            <Ico.repeat size={16} /> {reviewBusy ? 'Анализ…' : review ? 'Скрыть ревью' : 'Ревью месяца'}
-          </button>
-          <button onClick={() => { hapticSelect(); setWiz({ ...NEW_WIZ, step: 1 }) }} className="btn btn-ghost btn-sm">
-            <Ico.refresh size={16} /> Новый план
-          </button>
-        </div>
-
-        {showHist && (
-          <div className="mt">
-            {hist == null ? <Skeletons n={3} h={48} /> : hist.length === 0
-              ? <Empty icon="history" title="Истории пока нет" text="Завершённые тренировки появятся здесь." />
-              : (
-                <div className="rows">
-                  {hist.map((h, i) => (
-                    <div key={i} className="row">
-                      <span className="num" style={{ fontSize: 13, flex: 'none' }}>{fmtDate(h.date, true)}</span>
-                      <span className={`grow label${h.status === 'done' ? ' accent' : ''}`}>{SESSION_STATUS[h.status] ?? h.status}</span>
-                      <span className="num muted" style={{ fontSize: 13 }}>
-                        <span className="accent">{h.done}</span> / {h.skipped} проп.
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
+      {tools === 'menu' && (
+        <Sheet title="Тренировки" onClose={() => setTools(null)}>
+          <div className="cells">
+            <button className="cell" onClick={openHistory}>
+              <span className="cell-icon is-metal"><Ico.history size={20} /></span>
+              <span className="grow"><span className="cell-title" style={{ display: 'block' }}>История</span>
+                <span className="cell-sub" style={{ display: 'block' }}>Последние тренировки</span></span>
+            </button>
+            <button className="cell" onClick={loadReview}>
+              <span className="cell-icon"><Ico.repeat size={20} /></span>
+              <span className="grow"><span className="cell-title" style={{ display: 'block' }}>Ревью месяца</span>
+                <span className="cell-sub" style={{ display: 'block' }}>CheckAI предложит замены упражнений</span></span>
+            </button>
+            <button className="cell" onClick={() => { hapticSelect(); setTools(null); setWiz({ ...NEW_WIZ, step: 1 }) }}>
+              <span className="cell-icon is-metal"><Ico.refresh size={20} /></span>
+              <span className="grow"><span className="cell-title" style={{ display: 'block' }}>Новый план</span>
+                <span className="cell-sub" style={{ display: 'block' }}>Собрать заново с CheckAI или своим текстом</span></span>
+            </button>
           </div>
-        )}
+        </Sheet>
+      )}
 
-        {review && (
-          <div className="mt">
-            {review.no_changes_needed || !(review.changes ?? []).length
-              ? <Empty icon="check" title="Менять ничего не нужно" text="План в порядке — продолжай в том же темпе." />
-              : (
-                <>
-                  <div className="label" style={{ marginBottom: 8 }}>CheckAI предлагает замены</div>
-                  <div className="rows">
-                    {review.changes.map((ch: any, i: number) => {
-                      const on = accepted.has(i)
-                      const toggle = () => { hapticSelect(); const n = new Set(accepted); on ? n.delete(i) : n.add(i); setAccepted(n) }
-                      return (
-                        <div key={i} className="row" onClick={toggle} style={{ cursor: 'pointer', alignItems: 'flex-start' }}>
-                          <button className={`check${on ? ' is-on' : ''}`} role="checkbox" aria-checked={on}
-                            onClick={(e) => { e.stopPropagation(); toggle() }}><Ico.check size={16} /></button>
-                          <div className="grow wrap">
-                            <div><span className="muted">{ch.old_exercise}</span> → <b>{ch.new_exercise}</b></div>
-                            <div className="row-meta">{ch.day} · {ch.reason}</div>
-                          </div>
-                        </div>
-                      )
-                    })}
+      {tools === 'history' && (
+        <Sheet title="История" onClose={() => setTools(null)}>
+          {hist == null ? <Skeletons n={3} h={48} /> : hist.length === 0
+            ? <Empty icon="history" title="Истории пока нет" text="Завершённые тренировки появятся здесь." />
+            : (
+              <div className="rows">
+                {hist.map((h, i) => (
+                  <div key={i} className="row">
+                    <span className="num" style={{ fontSize: 13, flex: 'none' }}>{fmtDate(h.date, true)}</span>
+                    <span className={`grow label${h.status === 'done' ? ' accent' : ''}`}>{SESSION_STATUS[h.status] ?? h.status}</span>
+                    <span className="num muted" style={{ fontSize: 13 }}>
+                      <span className="accent">{h.done}</span> / {h.skipped} проп.
+                    </span>
                   </div>
-                  <button onClick={applyReview} disabled={busy || accepted.size === 0} className="btn btn-ghost btn-block mt">
-                    Применить выбранные · {accepted.size}
-                  </button>
-                </>
-              )}
-          </div>
-        )}
-      </Section>
+                ))}
+              </div>
+            )}
+        </Sheet>
+      )}
+
+      {tools === 'review' && (
+        <Sheet title="Ревью месяца" onClose={() => setTools(null)}>
+          {reviewBusy || !review ? (
+            <div><div className="muted" style={{ marginBottom: 10 }}>CheckAI анализирует месяц…</div><Skeletons n={2} h={56} /></div>
+          ) : review.no_changes_needed || !(review.changes ?? []).length
+            ? <Empty icon="check" title="Менять ничего не нужно" text="План в порядке — продолжай в том же темпе." />
+            : (
+              <>
+                <div className="muted" style={{ marginBottom: 10 }}>Отметь замены, которые хочешь применить:</div>
+                <div className="rows">
+                  {review.changes.map((ch: any, i: number) => {
+                    const on = accepted.has(i)
+                    const toggle = () => { hapticSelect(); const n = new Set(accepted); on ? n.delete(i) : n.add(i); setAccepted(n) }
+                    return (
+                      <div key={i} className="row" onClick={toggle} style={{ cursor: 'pointer', alignItems: 'flex-start' }}>
+                        <button className={`check${on ? ' is-on' : ''}`} role="checkbox" aria-checked={on}
+                          onClick={(e) => { e.stopPropagation(); toggle() }}><Ico.check size={16} /></button>
+                        <div className="grow wrap">
+                          <div><span className="muted">{ch.old_exercise}</span> → <b>{ch.new_exercise}</b></div>
+                          <div className="row-meta">{ch.day} · {ch.reason}</div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                <button onClick={applyReview} disabled={busy || accepted.size === 0} className="btn btn-primary btn-block mt">
+                  Применить · {accepted.size}
+                </button>
+              </>
+            )}
+        </Sheet>
+      )}
 
       {confirmFinish && (
         <Confirm title="Завершить тренировку?"

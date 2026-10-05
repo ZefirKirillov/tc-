@@ -21,6 +21,41 @@ from trackcheck.handlers.workouts import _ws_start_workout
 from trackcheck.handlers import router
 
 
+# Онбординг: бот — для быстрых действий и напоминаний, основная работа — в Mini App.
+WELCOME_TEXT = (
+    "👋 <b>Привет! Я TrackCheck</b> — помогаю держать форму и не терять дисциплину.\n"
+    "\n"
+    "Что внутри:\n"
+    "🏋️ <b>Тренировки</b> — план от ИИ или свой, отмечаешь упражнения прямо в зале\n"
+    "📒 <b>Чек-ин дня</b> — сон, зависание и настрой за минуту; еду и активность я оценю сам\n"
+    "🍽 <b>Питание</b> — норма калорий, еда текстом или по фото, вес и % жира\n"
+    "📝 <b>Задачи</b> — с приоритетом, дедлайнами и повтором\n"
+    "🤖 <b>CheckAI</b> — советы по твоим данным\n"
+    "🔥 <b>Серия, искры и ранги</b> — за каждый закрытый день\n"
+    "\n"
+    "Всё это удобнее всего в <b>приложении TrackCheck</b> прямо в Telegram.\n"
+    "\n"
+    "Сначала выбери часовой пояс — жми «ПОГНАЛИ» 👇"
+)
+
+READY_TEXT = (
+    "✅ <b>Готово!</b> Теперь открой приложение — там весь твой день:\n"
+    "\n"
+    "• кнопка <b>«TrackCheck»</b> слева от поля ввода\n"
+    "• или кнопка ниже\n"
+    "• или команда /app\n"
+    "\n"
+    "Здесь, в чате, я буду напоминать о тренировках, задачах и серии 🔥"
+)
+
+
+async def send_ready_message(bot: Bot, chat_id: int):
+    """Финал онбординга: как открыть Mini App. Сообщение не удаляется — остаётся подсказкой."""
+    from trackcheck.keyboards.dashboard import open_app_button
+    kb = InlineKeyboardMarkup(inline_keyboard=[[open_app_button("🚀 Открыть TrackCheck")]])
+    await bot.send_message(chat_id, READY_TEXT, parse_mode="HTML", reply_markup=kb)
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message, bot: Bot):
     try:
@@ -31,25 +66,10 @@ async def cmd_start(message: Message, bot: Bot):
     cursor = db.execute('SELECT first_name FROM user_settings WHERE user_id = ?', (user_id,))
     row = cursor.fetchone()
     if not row:
-        welcome_text = """
-🌟 *Добро пожаловать в TrackCheck!* 🌟
-
-Я помогу тебе отслеживать ключевые сферы жизни и развивать дисциплину.
-
-📒 *Рефлексия* – оценивай сон, еду, активность, зависание и настрой.
-⭐ *Ранги и искры* – за выполнение всех категорий или тренировку.
-🏋️ *Тренировки* – создавай категории и упражнения, ставь цели.
-🤖 *ИИ-советчик* – задавай вопросы, получай разбор оценок.
-🍽 *Диета* – рассчитывай норму калорий, записывай еду, вес, % жира.
-📊 *Статистика* – графики и динамика.
-🤳 *Анализ фото* – в разделе Тренировки, разбор сильных и слабых сторон телосложения.
-
-👇 Нажми кнопку **«ПОГНАЛИ 💪»**, чтобы начать!
-        """
         markup = InlineKeyboardMarkup(inline_keyboard=with_back_kb([
             [InlineKeyboardButton(text="ПОГНАЛИ 💪", callback_data="ws_start")]
         ]))
-        msg = await bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown", reply_markup=markup)
+        msg = await bot.send_message(message.chat.id, WELCOME_TEXT, parse_mode="HTML", reply_markup=markup)
         user_welcome_message[user_id] = msg.message_id
         asyncio.create_task(delete_welcome_after_delay(user_id, bot, msg.message_id))
         return
@@ -104,6 +124,7 @@ async def _start_onboarding(callback: CallbackQuery, bot: Bot, state: FSMContext
         )
         user_temp_messages.setdefault(user_id, {})['timezone_picker'] = msg.message_id
         return
+    await send_ready_message(bot, callback.message.chat.id)
     await send_main_menu(bot, user_id, callback.message.chat.id)
 
 
@@ -126,6 +147,7 @@ async def handle_timezone_choice(callback: CallbackQuery, bot: Bot):
     label = next((l for l, tz in RUSSIAN_TIMEZONES if tz == tz_name), tz_name)
     await callback.answer(f"Часовой пояс: {label} ✅")
     if context == "onboarding":
+        await send_ready_message(bot, callback.message.chat.id)
         await send_main_menu(bot, user_id, callback.message.chat.id)
     else:
         confirm_msg = await bot.send_message(callback.message.chat.id, f"🕒 Часовой пояс изменён на: {label}")
@@ -145,7 +167,10 @@ async def cmd_app(message: Message, bot: Bot):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚀 Открыть TrackCheck", web_app=WebAppInfo(url=MINIAPP_URL))]
     ])
-    msg = await message.answer("🚀 Мини-приложение TrackCheck — вся статистика, тренировки и задачи в одном окне:", reply_markup=kb)
+    msg = await message.answer(
+        "🚀 <b>TrackCheck</b> — тренировки, чек-ин, питание и задачи в одном окне.\n\n"
+        "Совет: приложение всегда под рукой — кнопка <b>«TrackCheck»</b> слева от поля ввода.",
+        reply_markup=kb, parse_mode="HTML")
     user_temp_messages.setdefault(message.from_user.id, {})['app_link'] = msg.message_id
 
 

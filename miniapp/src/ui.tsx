@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, errText, isNetworkError } from './api'
 import { Ico, type IconName } from './icons'
-import { hapticSelect, notifyErr } from './tg'
+import { hapticSelect, notifyErr, useBackButton } from './tg'
 
 // Shared building blocks: feedback states, skeletons, confirm sheet, formatting.
 
@@ -198,4 +198,41 @@ export function Confirm({ title, body, okLabel = 'Подтвердить', dange
       </div>
     </div>
   )
+}
+
+// ---------- bottom sheet ----------
+
+/** Bottom sheet for secondary flows (add food, check-in, tools). Closes on backdrop tap
+ *  and on Telegram's BackButton (higher priority than screen-level back). */
+export function Sheet({ title, onClose, children, aux }: {
+  title?: string; onClose: () => void; children: React.ReactNode; aux?: React.ReactNode
+}) {
+  useBackButton(onClose, 5)
+  useEffect(() => {
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [])
+  return (
+    <div className="sheet-back" onClick={onClose}>
+      <div className="sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-handle" />
+        {(title || aux) && (
+          <div className="sheet-title">
+            {title ? <h3>{title}</h3> : <span />}
+            {aux}
+          </div>
+        )}
+        <div className="sheet-body">{children}</div>
+      </div>
+    </div>
+  )
+}
+
+/** Russian plural: plural(5, 'день', 'дня', 'дней') → 'дней'. */
+export function plural(n: number, one: string, few: string, many: string): string {
+  const a = Math.abs(n) % 100
+  if (a >= 11 && a <= 19) return many
+  const b = a % 10
+  return b === 1 ? one : b >= 2 && b <= 4 ? few : many
 }

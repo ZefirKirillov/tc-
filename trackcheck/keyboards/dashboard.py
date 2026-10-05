@@ -13,14 +13,15 @@ def open_app_button(text: str = "🚀 Открыть приложение") -> I
 
 def main_menu_keyboard():
     # Главное меню — корневой экран: кнопки «Назад» здесь нет (возвращаться некуда).
+    # Mini App — главный способ работы с TrackCheck, поэтому кнопка первой.
     return InlineKeyboardMarkup(inline_keyboard=[
+        [open_app_button("🚀 Открыть TrackCheck")],
         [InlineKeyboardButton(text="📒 Рефлексия", callback_data="menu_reflection"),
          InlineKeyboardButton(text="⭐ Ранг", callback_data="menu_rank")],
         [InlineKeyboardButton(text="🏋️ Тренировки", callback_data="menu_workouts"),
          InlineKeyboardButton(text="Check AI", callback_data="menu_ai")],
         [InlineKeyboardButton(text="🍽 Диета", callback_data="menu_diet"),
          InlineKeyboardButton(text="📝 Задачи", callback_data="menu_tasks")],
-        [open_app_button()],
     ])
 
 

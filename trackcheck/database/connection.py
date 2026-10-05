@@ -63,6 +63,50 @@ class _CompatCursor:
 
 
 
+class _BufferedCursor:
+    """Результат запроса, полностью прочитанный ПОД lock'ом.
+
+    Соединение одно на весь процесс и используется из нескольких потоков (пул run_db,
+    Mini App API, планировщик). Если отдавать «живой» курсор и делать fetchone()
+    уже после выхода из lock'а, запись/commit из другого потока в этот промежуток
+    сбрасывает незавершённое чтение — и fetchone() молча возвращает None
+    (воспроизведено: «пропадающий» план тренировки → оценка активности не ставилась).
+    Поэтому строки забираются сразу, а наружу уходит только буфер."""
+    __slots__ = ('_rows', '_pos', 'lastrowid', 'rowcount', 'description')
+
+    def __init__(self, rows, lastrowid, rowcount, description):
+        self._rows = rows
+        self._pos = 0
+        self.lastrowid = lastrowid
+        self.rowcount = rowcount
+        self.description = description
+
+    def fetchone(self):
+        if self._pos >= len(self._rows):
+            return None
+        row = self._rows[self._pos]
+        self._pos += 1
+        return row
+
+    def fetchall(self):
+        rows = self._rows[self._pos:]
+        self._pos = len(self._rows)
+        return rows
+
+    def fetchmany(self, size: int = 1):
+        rows = self._rows[self._pos:self._pos + size]
+        self._pos += len(rows)
+        return rows
+
+    def __iter__(self):
+        while True:
+            row = self.fetchone()
+            if row is None:
+                return
+            yield row
+
+
+
 class Database:
     """
     Обёртка над одним постоянным соединением с базой данных.
@@ -127,13 +171,17 @@ class Database:
                     # тогда commit() может быть не нужен/не поддержан. Не роняем
                     # бота из-за этого, но логируем на случай если причина другая.
                     print(f"[DB-TURSO] commit() после записи: {e}")
-            return _CompatCursor(cur)
+            wrapped = _CompatCursor(cur)
+            desc = getattr(cur, 'description', None)
+            rows = wrapped.fetchall() if desc else []
+            return _BufferedCursor(rows, wrapped.lastrowid, wrapped.rowcount, desc)
         else:
             cur = self._conn.cursor()
             cur.execute(query, params)
             if is_write:
                 self._conn.commit()
-            return cur
+            rows = cur.fetchall() if cur.description else []
+            return _BufferedCursor(rows, cur.lastrowid, cur.rowcount, cur.description)
 
     def commit(self):
         with self._lock:

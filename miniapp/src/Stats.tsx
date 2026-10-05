@@ -60,10 +60,14 @@ export default function Stats() {
             <div style={{ gridColumn: '1 / -1' }}>
               <div className="hstack spread" style={{ marginBottom: 6 }}>
                 <span className="label">Тренировки за месяц</span>
-                <span className="num" style={{ fontSize: 13 }}>{fmt(data.workout?.current_count ?? 0)}/{fmt(data.workout?.monthly_goal ?? 0)}</span>
+                <span className="num" style={{ fontSize: 13 }}>
+                  {fmt(data.workout?.current_count ?? 0)}{data.workout?.monthly_goal ? `/${fmt(data.workout.monthly_goal)}` : ''}
+                </span>
               </div>
-              <Meter value={data.workout?.current_count ?? 0} max={data.workout?.monthly_goal ?? 0}
-                tone={(data.workout?.current_count ?? 0) >= (data.workout?.monthly_goal ?? 1) ? 'warm' : undefined} />
+              {data.workout?.monthly_goal > 0 && (
+                <Meter value={data.workout?.current_count ?? 0} max={data.workout.monthly_goal}
+                  tone={(data.workout?.current_count ?? 0) >= data.workout.monthly_goal ? 'warm' : undefined} />
+              )}
             </div>
           </div>
 

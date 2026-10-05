@@ -1651,6 +1651,8 @@ async def ws_skip_day_reason(message: Message, bot: Bot, state: FSMContext):
                 await run_db(db.commit)
         # Отнимаем искру за пропущенный тренировочный день
         await run_db(_deduct_spark_for_skip, user_id)
+        # Пропущенная тренировка → «активность» = 1 сразу, не дожидаясь конца дня
+        await run_db(sync_activity_rating_for_today, user_id)
         # Состояние сбрасываем СРАЗУ после записи — дальше только чтение и
         # отправка, и любой их провал уже не оставит юзера в skipping_day.
         await state.clear()

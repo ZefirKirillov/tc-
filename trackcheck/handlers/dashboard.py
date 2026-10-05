@@ -9,7 +9,7 @@ from trackcheck.database.repositories import (
 from trackcheck.services.gamification_service import (
     get_rank_name, get_rank_emoji, get_sparks_for_next_rank,
 )
-from trackcheck.utils.formatting import create_new_progress_bar
+from trackcheck.utils.formatting import create_new_progress_bar, workouts_progress
 from trackcheck.utils.bot_helpers import delete_temp_messages
 from trackcheck.utils.concurrency import run_db
 from trackcheck.keyboards.common import ensure_back_keyboard
@@ -62,7 +62,7 @@ def format_main_menu(user_id: int) -> str:
     total_sparks = rank_data['total_sparks']
     sparks_needed, next_total = get_sparks_for_next_rank(rank_id, total_sparks)
 
-    lines.append(f"│ 🏋️ {workout_data['current_count']}/{workout_data['monthly_goal']} | ✨ {total_sparks}/{next_total} искр")
+    lines.append(f"│ 🏋️ {workouts_progress(workout_data)} | ✨ {total_sparks}/{next_total} искр")
     lines.append(f"│ {calories_line}")
     lines.append(f"│ 🔥 Стрик: {streak} дней")
     lines.append("└─────────────────────")

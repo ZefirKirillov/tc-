@@ -16,6 +16,24 @@ from trackcheck.services.tracker_service import finalize_daily_ratings_for_timez
 from trackcheck.handlers import router
 
 
+async def setup_bot_entry_points(bot: Bot):
+    """Кнопка «TrackCheck» слева от поля ввода (открывает Mini App) + список команд.
+    Онбординг ссылается на эту кнопку. Ошибка здесь не должна мешать запуску бота."""
+    from aiogram.types import BotCommand, MenuButtonWebApp, WebAppInfo
+    from trackcheck.config import MINIAPP_URL
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(text="TrackCheck", web_app=WebAppInfo(url=MINIAPP_URL)))
+        await bot.set_my_commands([
+            BotCommand(command="app", description="Открыть приложение"),
+            BotCommand(command="start", description="Главное меню"),
+            BotCommand(command="timezone", description="Часовой пояс"),
+        ])
+        print("[BOOT] Кнопка Mini App и команды установлены")
+    except Exception as e:
+        print(f"[BOOT] Не удалось установить кнопку меню/команды: {e}")
+
+
 async def main():
     print("[BOOT] Старт...")
     init_db()
@@ -29,6 +47,7 @@ async def main():
 
     bot = Bot(token=BOT_TOKEN)
     print("[BOOT] Бот создан")
+    await setup_bot_entry_points(bot)
 
     scheduler = AsyncIOScheduler()
     for _, tz_name in RUSSIAN_TIMEZONES:

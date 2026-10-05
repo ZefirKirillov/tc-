@@ -282,7 +282,7 @@ def get_or_create_workout_data(user_id: int) -> dict:
             db.commit()
         return {
             'user_id': user_id,
-            'monthly_goal': goal,
+            'monthly_goal': get_monthly_workout_goal(user_id, goal),
             'current_count': count,
             'last_workout_date': last_date,
             'today_count': today_count
@@ -295,11 +295,53 @@ def get_or_create_workout_data(user_id: int) -> dict:
         db.commit()
         return {
             'user_id': user_id,
-            'monthly_goal': 0,
+            'monthly_goal': get_monthly_workout_goal(user_id, 0),
             'current_count': 0,
             'last_workout_date': today,
             'today_count': 0
         }
+
+
+
+def count_planned_days_in_month(plan_data: dict, year: int, month: int) -> int:
+    """Сколько тренировочных дней план даёт в этом месяце (с даты старта плана).
+    Неделя цикла для каждой даты — по тому же правилу, что get_current_week_session_key."""
+    import calendar
+    from datetime import date as _date
+    plan = (plan_data or {}).get("plan") or {}
+    if not isinstance(plan, dict):
+        return 0
+    cycle_weeks = plan_data.get("cycle_weeks", plan.get("cycle_weeks", 1)) or 1
+    first = _date(year, month, 1)
+    try:
+        start = datetime.strptime(plan_data.get("start_date") or "", "%Y-%m-%d").date()
+    except Exception:
+        start = first
+    count = 0
+    for day in range(1, calendar.monthrange(year, month)[1] + 1):
+        d = _date(year, month, day)
+        if d < start:
+            continue
+        week_idx = (max(0, (d - start).days // 7) % cycle_weeks) + 1
+        week = plan.get(f"week_{week_idx}") or plan.get("week_1") or {}
+        exercises = week.get(WEEKDAY_KEY[d.weekday()]) if isinstance(week, dict) else None
+        if isinstance(exercises, list) and exercises:
+            count += 1
+    return count
+
+
+def get_monthly_workout_goal(user_id: int, stored_goal: int = 0) -> int:
+    """Цель на месяц = тренировочные дни по плану. Ручная цель (старый поток) — запасной вариант."""
+    try:
+        plan_data = get_ai_plan(user_id)
+        if plan_data:
+            today = user_today_date(user_id)
+            planned = count_planned_days_in_month(plan_data, today.year, today.month)
+            if planned > 0:
+                return planned
+    except Exception as e:
+        print(f"[WORKOUT GOAL] user={user_id}: {e}")
+    return stored_goal or 0
 
 
 

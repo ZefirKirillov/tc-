@@ -105,3 +105,12 @@ def format_repeat_days(repeat_days: str) -> str:
         return ", ".join(days)
     except:
         return ""
+
+
+
+def workouts_progress(workout_data: dict) -> str:
+    """«3/12» — или просто «3», если цели на месяц нет (нет плана тренировок)."""
+    data = workout_data or {}
+    count = data.get('current_count', 0) or 0
+    goal = data.get('monthly_goal', 0) or 0
+    return f"{count}/{goal}" if goal else str(count)

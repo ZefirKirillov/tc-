@@ -135,6 +135,8 @@ def set_last_notify_msg_id(user_id: int, msg_id: Optional[int]) -> None:
 
 # --- Context collection ---
 
+MANUAL_CATEGORIES = ("сон", "зависание", "настрой")
+
 def _deadline_days_left(deadline: Optional[str], user_id: int) -> Optional[int]:
     if not deadline:
         return None
@@ -161,7 +163,7 @@ def collect_context(user_id: int) -> dict:
     for t in open_tasks:
         dl = _deadline_days_left(t.get("deadline"), user_id)
         if t.get("is_priority") or (dl is not None and dl <= 1):
-            important_tasks.append(t)
+            important_tasks.append({**t, "_days_left": dl})
 
     try:
         today_r = get_today_ratings(user_id)
@@ -182,6 +184,7 @@ def collect_context(user_id: int) -> dict:
     # диета сильно мимо цели? (>25% недобор/перебор к этому часу дня — грубо:
     # сравниваем факт с пропорциональной нормой)
     diet_off = False
+    diet_over = False
     diet_info = ""
     try:
         profile = get_diet_profile(user_id)
@@ -194,6 +197,7 @@ def collect_context(user_id: int) -> dict:
             diet_info = f"{int(eaten)}/{int(goal)} ккал"
             if eaten < expected * 0.5 or eaten > goal * 1.25:
                 diet_off = True
+                diet_over = eaten > goal * 1.25
     except Exception:
         pass
 
@@ -202,8 +206,26 @@ def collect_context(user_id: int) -> dict:
     except Exception:
         name = "друг"
 
-    missing_ratings = [c for c in ("сон", "еда", "активность", "зависание", "настрой")
-                       if c not in today_r]
+    # Только то, что пользователь оценивает сам: «еда» и «активность» считаются автоматически.
+    missing_ratings = [c for c in MANUAL_CATEGORIES if c not in today_r]
+
+    # Серия: только чтение (get_streak сбрасывает её в БД — здесь это не нужно).
+    streak, active_today = 0, False
+    try:
+        row = db.execute("SELECT streak_days, last_active_date FROM user_settings WHERE user_id = ?",
+                         (user_id,)).fetchone()
+        if row and row[0]:
+            today = user_today_str(user_id)
+            yesterday = (user_now(user_id) - timedelta(days=1)).strftime("%Y-%m-%d")
+            active_today = row[1] == today
+            if row[1] in (today, yesterday):
+                streak = int(row[0])
+    except Exception:
+        pass
+    try:
+        hour = user_now(user_id).hour
+    except Exception:
+        hour = 12
     return {
         "name": name,
         "open_tasks": open_tasks,
@@ -211,7 +233,11 @@ def collect_context(user_id: int) -> dict:
         "missing_ratings": missing_ratings,
         "workout_pending": workout_pending,
         "diet_off": diet_off,
+        "diet_over": diet_over,
         "diet_info": diet_info,
+        "streak": streak,
+        "active_today": active_today,
+        "hour": hour,
     }
 
 
@@ -226,89 +252,231 @@ def has_anything_to_say(ctx: dict) -> bool:
                 or ctx["workout_pending"] or ctx["diet_off"])
 
 
-# --- Text: rule-based templates (no AI) ---
+# --- Text: rule-based, one focus per notification (no AI) ---
+#
+# Стиль «как в Duolingo»: короткий жирный заголовок + одна живая строка, один
+# понятный призыв. Из всего, что есть сказать, выбираем ОДНУ самую важную тему
+# (а не склеиваем всё подряд) — так уведомление читается за секунду.
+# Тексты зависят от времени суток; одна и та же формулировка не повторяется дважды подряд.
 
-# Несколько вариантов формулировок на сценарий, чтобы уведомления
-# не выглядели одинаково. Выбор — случайно, по одному шаблону
-# на каждый присутствующий блок контекста.
+import html as _html
 
-_T_IMPORTANT = [
-    "🔥 Важно: {titles} — закрой сегодня, пока не сгорело!",
-    "🔥 Не забудь про главное: {titles}",
-    "🔥 {titles} ждут тебя — давай разберёмся с этим!",
-    "🔥 Приоритет дня: {titles}. Погнали?",
+# Последний показанный вариант по (user, тема) — чтобы не повторяться. Только в памяти.
+_last_variant: dict = {}
+
+
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    n = abs(n) % 100
+    if 11 <= n <= 19:
+        return many
+    n %= 10
+    return one if n == 1 else few if 2 <= n <= 4 else many
+
+
+def _daypart(hour: int) -> str:
+    if 5 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 18:
+        return "day"
+    if 18 <= hour < 23:
+        return "evening"
+    return "night"
+
+
+def _q(title: str, limit: int = 40) -> str:
+    t = (title or "").strip()
+    if len(t) > limit:
+        t = t[:limit - 1].rstrip() + "…"
+    return "«" + _html.escape(t) + "»"
+
+
+def _choose(user_id: int, topic: str, variants: list) -> tuple:
+    """Случайный вариант, но не тот же, что был в прошлый раз для этой темы."""
+    last = _last_variant.get((user_id, topic))
+    pool = [v for v in variants if v != last] or variants
+    v = random.choice(pool)
+    _last_variant[(user_id, topic)] = v
+    return v
+
+
+# Каждая тема: (заголовок, текст). Плейсхолдеры подставляются через .format().
+_V_DEADLINE = [
+    ("⏰ Дедлайн сегодня", "{title} нужно закрыть до конца дня. Пара минут — и гора с плеч."),
+    ("⏰ Сегодня последний день", "{title} ждёт. Сделаешь сейчас — вечер будет свободным."),
+]
+_V_DEADLINE_TOMORROW = [
+    ("⏳ Завтра дедлайн", "{title} — лучше начать сегодня, чем бежать завтра."),
+    ("⏳ Осталась одна ночь", "{title} сдаётся завтра. Маленький шаг сегодня?"),
+]
+_V_PRIORITY = [
+    ("🔥 {title} всё ещё ждёт", "Это та самая задача с огоньком. Закроем?"),
+    ("🔥 Главное на сегодня", "{title}. Остальное подождёт."),
+    ("🔥 Одна важная задача", "{title} — и можно выдохнуть."),
+]
+_V_WORKOUT = {
+    "morning": [
+        ("🏋️ Сегодня день тренировки", "План уже готов. Начнёшь пораньше — вечер свободен."),
+        ("☀️ Доброе утро, атлет", "Сегодня по плану тренировка. Не забудь бутылку воды 💧"),
+    ],
+    "day": [
+        ("💪 Штанга скучает", "Тренировка на сегодня ещё не отмечена."),
+        ("🏋️ Самое время для зала", "Сегодняшняя тренировка ждёт в приложении."),
+    ],
+    "evening": [
+        ("🏋️ Тренировка ещё не сделана", "До конца дня {left}. Даже короткая сессия лучше пропуска."),
+        ("💪 Последний шанс сегодня", "Отметь хотя бы пару упражнений — прогресс любит регулярность."),
+    ],
+    "night": [
+        ("🌙 Сегодня по плану тренировка", "Сначала выспись — а потом в зал 💪"),
+    ],
+}
+_V_STREAK_RISK = [
+    ("🔥 Серия {n} {days} под угрозой", "Заполни чек-ин за минуту — и огонь не погаснет."),
+    ("🔥 Не дай серии сгореть", "{n} {days} подряд! Одна минута на чек-ин — и завтра будет {n1}."),
+    ("😬 Огонёк гаснет…", "Серия {n} {days} закончится в полночь. Спасёшь её?"),
+]
+_V_STREAK_KEEP = [
+    ("🔥 {n} {days} подряд", "Продолжим? Сегодняшний чек-ин ещё впереди."),
+    ("🔥 Ты в ударе: {n} {days} подряд", "Отметь сегодняшний день, чтобы серия росла."),
+]
+_V_CHECKIN_ALL = {
+    "morning": [
+        ("☀️ Как спалось?", "Начни день с чек-ина — сон уже можно оценить."),
+        ("☀️ Новый день — новая отметка", "Оцени, как спалось, остальное — по ходу дня."),
+    ],
+    "day": [
+        ("📒 Минутка на себя", "Сон, зависание, настрой — как сегодня?"),
+        ("📒 Как идёт день?", "3 быстрые оценки — и чек-ин готов."),
+    ],
+    "evening": [
+        ("📒 Как прошёл день?", "3 быстрые оценки — минута, и чек-ин готов."),
+        ("📒 Подведём итоги?", "Оцени день, пока он свеж в памяти."),
+    ],
+    "night": [
+        ("🌙 Новый день начался", "Утром оцени, как спалось — это первая отметка дня."),
+    ],
+}
+_V_CHECKIN_SOME = [
+    ("📒 Почти готово", "Осталось: {cats} — и чек-ин закрыт ✨"),
+    ("📒 Ещё чуть-чуть", "Не хватает только: {cats}."),
+]
+_V_DIET_UNDER = [
+    ("🍽 Ты сегодня ел?", "Пока {info}. Запиши приём пищи — можно просто сфоткать тарелку."),
+    ("🍽 Дневник питания пустоват", "Сейчас {info}. Не забудь записать, что ел."),
+]
+_V_DIET_OVER = [
+    ("🍽 Калорий уже с запасом", "{info}. Ужин полегче — и день в норме."),
+    ("🍽 Норма уже позади", "{info}. Завтра выровняем 😉"),
+]
+_V_TASKS = [
+    ("📝 {n} {tasks} на сегодня", "Начни с {title} — дальше пойдёт легче."),
+    ("📝 Список ждёт", "{title} и ещё {rest}. По одной — и всё закрыто."),
+]
+_V_FALLBACK = [
+    ("👋 Загляни в TrackCheck", "Пара минут на себя — и день под контролем."),
+    ("✨ Как ты там?", "Загляни в приложение — отметь, как прошёл день."),
 ]
 
-_T_TASKS = [
-    "📝 Открытые задачи ({n}): {titles}",
-    "📝 У тебя {n} незакрытых: {titles} — поехали по одной?",
-    "📝 Напоминаю про задачи ({n}): {titles}",
-]
-
-_T_WORKOUT = [
-    "🏋️ Сегодня тренировка — ещё не отмечена. Самое время!",
-    "🏋️ Тренировка ждёт! Отметь, когда сделаешь 💪",
-    "🏋️ Не пропусти тренировку сегодня!",
-]
-
-_T_DIET = [
-    "🍽 Калории: {info} — загляни в дневник питания",
-    "🍽 По питанию так: {info}",
-    "🍽 Проверь калории: {info}",
-]
-
-_T_RATINGS = [
-    "📒 Не оценено: {cats} — займёт минуту",
-    "📒 Загляни в рефлексию: {cats} ещё без оценки",
-    "📒 Осталось оценить: {cats}",
-]
-
-_T_FALLBACK = [
-    "Загляни в TrackCheck 👋",
-    "Эй, как дела? Загляни в TrackCheck 👋",
-    "Пара минут на себя — открой TrackCheck ✨",
-]
+# Кнопка-призыв по теме: (текст, вкладка Mini App).
+_CTA = {
+    "deadline": ("📝 Открыть задачи", "tasks"),
+    "priority": ("📝 Открыть задачи", "tasks"),
+    "tasks": ("📝 Открыть задачи", "tasks"),
+    "workout": ("💪 К тренировке", "workout"),
+    "streak": ("🔥 Спасти серию", "checkin"),
+    "streak_keep": ("🔥 Продолжить серию", "checkin"),
+    "checkin": ("📒 Отметить день", "checkin"),
+    "diet": ("🍽 Открыть питание", "diet"),
+    "fallback": ("🚀 Открыть TrackCheck", None),
+}
 
 
-def _pick(tpl: list, **kw) -> str:
-    return random.choice(tpl).format(**kw)
+def pick_topic(ctx: dict) -> str:
+    """Одна тема по приоритету: дедлайны → огонёк → тренировка → серия → чек-ин → диета → задачи.
+    Серия: вечером «под угрозой», днём «продолжим?», ночью не упоминаем (день только начался)."""
+    imp = ctx["important_tasks"]
+    if any(t.get("_days_left") is not None and t["_days_left"] <= 1 for t in imp):
+        return "deadline"
+    if imp:
+        return "priority"
+    if ctx["workout_pending"]:
+        return "workout"
+    if ctx.get("streak", 0) >= 2 and not ctx.get("active_today") and ctx["missing_ratings"]:
+        part = _daypart(ctx.get("hour", 12))
+        if part == "evening":
+            return "streak"        # серия сгорит в полночь
+        if part in ("morning", "day"):
+            return "streak_keep"   # мягкое «продолжим?»
+    if ctx["missing_ratings"]:
+        return "checkin"
+    if ctx["diet_off"] and ctx["diet_info"]:
+        return "diet"
+    if ctx["open_tasks"]:
+        return "tasks"
+    return "fallback"
+
+
+def build_message(user_id: int, ctx: dict) -> tuple:
+    """-> (HTML-текст, тема)."""
+    topic = pick_topic(ctx)
+    part = _daypart(ctx.get("hour", 12))
+    kw = {}
+    if topic == "deadline":
+        t = min((t for t in ctx["important_tasks"] if t.get("_days_left") is not None),
+                key=lambda t: t["_days_left"])
+        variants = _V_DEADLINE if t["_days_left"] <= 0 else _V_DEADLINE_TOMORROW
+        kw["title"] = _q(t["title"])
+    elif topic == "priority":
+        variants = _V_PRIORITY
+        kw["title"] = _q(ctx["important_tasks"][0]["title"], 32)
+    elif topic == "workout":
+        variants = _V_WORKOUT[part]
+        left = max(1, 24 - ctx.get("hour", 12))
+        kw["left"] = f"{left} {_plural(left, 'час', 'часа', 'часов')}"
+    elif topic in ("streak", "streak_keep"):
+        n = ctx["streak"]
+        variants = _V_STREAK_RISK if topic == "streak" else _V_STREAK_KEEP
+        kw.update(n=n, n1=n + 1, days=_plural(n, "день", "дня", "дней"))
+    elif topic == "checkin":
+        miss = ctx["missing_ratings"]
+        if len(miss) == len(MANUAL_CATEGORIES):
+            variants = _V_CHECKIN_ALL[part]
+        else:
+            variants = _V_CHECKIN_SOME
+            kw["cats"] = ", ".join(miss)
+    elif topic == "diet":
+        variants = _V_DIET_OVER if ctx.get("diet_over") else _V_DIET_UNDER
+        kw["info"] = ctx["diet_info"]
+    elif topic == "tasks":
+        n = len(ctx["open_tasks"])
+        variants = _V_TASKS if n > 1 else _V_TASKS[:1]
+        kw.update(n=n, tasks=_plural(n, "задача", "задачи", "задач"),
+                  title=_q(ctx["open_tasks"][0]["title"], 32), rest=n - 1)
+    else:
+        variants = _V_FALLBACK
+    head, body = _choose(user_id, topic, variants)
+    text = f"<b>{head.format(**kw)}</b>\n{body.format(**kw)}"
+    return text, topic
 
 
 def build_template_text(ctx: dict) -> str:
-    parts = []
-    if ctx["important_tasks"]:
-        titles = ", ".join(f"«{t['title'][:30]}»" for t in ctx["important_tasks"][:3])
-        parts.append(_pick(_T_IMPORTANT, titles=titles))
-    elif ctx["open_tasks"]:
-        n = len(ctx["open_tasks"])
-        titles = ", ".join(f"«{t['title'][:30]}»" for t in ctx["open_tasks"][:2])
-        parts.append(_pick(_T_TASKS, n=n, titles=titles))
-    if ctx["workout_pending"]:
-        parts.append(random.choice(_T_WORKOUT))
-    if ctx["diet_off"] and ctx["diet_info"]:
-        parts.append(_pick(_T_DIET, info=ctx["diet_info"]))
-    if ctx["missing_ratings"]:
-        parts.append(_pick(_T_RATINGS, cats=", ".join(ctx["missing_ratings"])))
-    return " • ".join(parts)[:400] if parts else random.choice(_T_FALLBACK)
+    """Совместимость: plain-текст без разметки."""
+    import re
+    text, _ = build_message(0, ctx)
+    return _html.unescape(re.sub(r"</?b>", "", text))
 
 
-# --- Keyboard depends on content ---
+# --- Keyboard: one call-to-action straight into the Mini App + mute ---
 
-def notify_keyboard(ctx: dict):
-    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-    rows = []
-    btns = []
-    if ctx["open_tasks"] or ctx["important_tasks"]:
-        btns.append(InlineKeyboardButton(text="📝 Задачи", callback_data="menu_tasks"))
-    if ctx["workout_pending"]:
-        btns.append(InlineKeyboardButton(text="🏋️ Тренировка", callback_data="menu_workouts"))
-    if ctx["diet_off"] or ctx["diet_info"]:
-        btns.append(InlineKeyboardButton(text="🍽 Диета", callback_data="menu_diet"))
-    if not btns:
-        btns.append(InlineKeyboardButton(text="📒 Рефлексия", callback_data="menu_reflection"))
-    rows.append(btns)
-    rows.append([InlineKeyboardButton(text="🔕 До утра", callback_data="notify_mute")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+def notify_keyboard(ctx: dict, topic: Optional[str] = None):
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+    from trackcheck.config import MINIAPP_URL
+    label, tab = _CTA.get(topic or pick_topic(ctx), _CTA["fallback"])
+    url = f"{MINIAPP_URL}?tab={tab}" if tab else MINIAPP_URL
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=label, web_app=WebAppInfo(url=url))],
+        [InlineKeyboardButton(text="🔕 До утра", callback_data="notify_mute")],
+    ])
 
 
 # --- Send with single-slot replace ---
@@ -329,8 +497,7 @@ async def send_notification(bot, user_id: int, kind: str) -> None:
         return
     # для usual пропускаем если всё важное уже покрыто часовым? нет — шлём,
     # слот один, замена произойдёт ниже.
-    text = build_template_text(ctx)
-    prefix = "🔥 " if important else "🔔 "
+    text, topic = build_message(user_id, ctx)
     try:
         old_id = await run_db(get_last_notify_msg_id, user_id)
         if old_id:
@@ -338,11 +505,11 @@ async def send_notification(bot, user_id: int, kind: str) -> None:
                 await bot.delete_message(user_id, old_id)
             except Exception:
                 pass
-        msg = await bot.send_message(user_id, prefix + text,
-                                     reply_markup=notify_keyboard(ctx))
+        msg = await bot.send_message(user_id, text, parse_mode="HTML",
+                                     reply_markup=notify_keyboard(ctx, topic))
         await run_db(set_last_notify_msg_id, user_id, msg.message_id)
         log_action(f"NOTIFY_{kind.upper()}", user_id,
-                   f"template important={important}")
+                   f"template topic={topic} important={important}")
     except Exception as e:
         print(f"[NOTIFY] send fail user={user_id}: {e}")
 
