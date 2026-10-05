@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api } from './api'
+import { api, keep } from './api'
 import { Ico, type IconName } from './icons'
 import { hapticSelect, useBackButton } from './tg'
 import { LoadError, Skeleton, useOnline } from './ui'
@@ -30,7 +30,11 @@ export default function App() {
 
   const loadMe = useCallback(() => {
     setLoadErr(null)
-    api.me().then(setMe).catch((e) => setLoadErr(e))
+    api.me().then((m) => {
+      setMe(m)
+      // Workout is the most used screen — warm its cache right after the shell is up.
+      api.workout().then((d) => keep('workout', d)).catch(() => {})
+    }).catch((e) => setLoadErr(e))
   }, [])
   useEffect(loadMe, [loadMe])
 

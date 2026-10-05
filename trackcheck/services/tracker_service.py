@@ -66,6 +66,13 @@ def sync_activity_rating_for_today(user_id: int):
 
 
 async def finalize_daily_ratings_for_timezone(tz_name: str):
+    """Обёртка для планировщика: вся работа с БД — в пуле потоков, чтобы цикл
+    по всем пользователям не блокировал event loop (бот и Mini App)."""
+    from trackcheck.utils.concurrency import run_db
+    await run_db(_finalize_daily_ratings_sync, tz_name)
+
+
+def _finalize_daily_ratings_sync(tz_name: str):
     """Раз в сутки (23:55 по местному времени каждого часового пояса): если 'еда' или
     'активность' за сегодня так и не были залогированы - проставляет 0, а для
     активности - 5, если по плану сегодня был день отдыха."""

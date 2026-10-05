@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api } from './api'
+import { api, keep, peek } from './api'
 import { Ico } from './icons'
 import MainAction from './MainAction'
 import { haptic } from './tg'
@@ -8,10 +8,12 @@ import { Empty, Section, Skeletons, useBanner } from './ui'
 export default function AI() {
   const b = useBanner()
   const [q, setQ] = useState('')
-  const [answer, setAnswer] = useState<string | null>(null)
+  const [answer, setAnswerRaw] = useState<string | null>(() => peek('ai') ?? null)
   const [answerKind, setAnswerKind] = useState<'last' | 'advice' | 'ask'>('last')
   const [busy, setBusy] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(() => peek('ai') === undefined)
+
+  const setAnswer = (a: string | null) => setAnswerRaw(keep('ai', a))
 
   useEffect(() => {
     api.aiLast().then((r) => { if (r.answer) setAnswer(r.answer) }).catch(() => {}).finally(() => setLoading(false))

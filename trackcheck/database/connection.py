@@ -1,5 +1,7 @@
+import os
 import sqlite3
 import threading
+import time
 
 from trackcheck.config import DB_PATH, TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, USE_TURSO, libsql
 
@@ -91,39 +93,47 @@ class Database:
             self._conn.execute("PRAGMA foreign_keys = ON")
 
     def execute(self, query: str, params: tuple = ()):
+        t_wait = time.perf_counter()
         with self._lock:
-            _q = query.strip().upper()
-            is_write = _q.startswith(
-                ('INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER', 'PRAGMA')
-            )
-            if _q.startswith(('INSERT', 'UPDATE', 'DELETE')):
-                # Лог тяжёлых действий в Render livetail (stdout).
-                # Только форматирование уже имеющихся аргументов — без доп.
-                # запросов, ~микросекунды. Отключение: ACTION_LOG_ENABLED=0.
+            t_run = time.perf_counter()
+            try:
+                return self._execute_locked(query, params)
+            finally:
+                _log_if_slow(query, t_run - t_wait, time.perf_counter() - t_run)
+
+    def _execute_locked(self, query: str, params: tuple):
+        _q = query.strip().upper()
+        is_write = _q.startswith(
+            ('INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER', 'PRAGMA')
+        )
+        if _q.startswith(('INSERT', 'UPDATE', 'DELETE')):
+            # Лог тяжёлых действий в Render livetail (stdout).
+            # Только форматирование уже имеющихся аргументов — без доп.
+            # запросов, ~микросекунды. Отключение: ACTION_LOG_ENABLED=0.
+            try:
+                from trackcheck.utils.action_log import log_action
+                uid = params[0] if params and isinstance(params[0], int) else None
+                one_line = ' '.join(query.split())
+                log_action(_q.split()[0] + '_DB', uid, one_line[:120])
+            except Exception:
+                pass
+        if self._mode == 'turso':
+            cur = self._conn.execute(query, params)
+            if is_write:
                 try:
-                    from trackcheck.utils.action_log import log_action
-                    uid = params[0] if params and isinstance(params[0], int) else None
-                    one_line = ' '.join(query.split())
-                    log_action(_q.split()[0] + '_DB', uid, one_line[:120])
-                except Exception:
-                    pass
-            if self._mode == 'turso':
-                cur = self._conn.execute(query, params)
-                if is_write:
-                    try:
-                        self._conn.commit()
-                    except Exception as e:
-                        # Некоторые режимы Turso автокоммитят каждый запрос сами -
-                        # тогда commit() может быть не нужен/не поддержан. Не роняем
-                        # бота из-за этого, но логируем на случай если причина другая.
-                        print(f"[DB-TURSO] commit() после записи: {e}")
-                return _CompatCursor(cur)
-            else:
-                cur = self._conn.cursor()
-                cur.execute(query, params)
-                if is_write:
                     self._conn.commit()
-                return cur
+                except Exception as e:
+                    # Некоторые режимы Turso автокоммитят каждый запрос сами -
+                    # тогда commit() может быть не нужен/не поддержан. Не роняем
+                    # бота из-за этого, но логируем на случай если причина другая.
+                    print(f"[DB-TURSO] commit() после записи: {e}")
+            return _CompatCursor(cur)
+        else:
+            cur = self._conn.cursor()
+            cur.execute(query, params)
+            if is_write:
+                self._conn.commit()
+            return cur
 
     def commit(self):
         with self._lock:
@@ -133,6 +143,22 @@ class Database:
         with self._lock:
             self._conn.close()
 
+
+
+# Диагностика скорости: каждый запрос к Turso — сетевой round-trip, и все они
+# идут через один lock. Логируем медленные (порог DB_SLOW_MS, 0 — выключить),
+# отдельно время ожидания lock'а — оно показывает очередь из других запросов.
+_SLOW_MS = float(os.environ.get("DB_SLOW_MS", "250"))
+
+
+def _log_if_slow(query: str, wait_s: float, run_s: float) -> None:
+    if _SLOW_MS <= 0 or (wait_s + run_s) * 1000 < _SLOW_MS:
+        return
+    try:
+        q = ' '.join(query.split())[:90]
+        print(f"[DB-SLOW] {run_s * 1000:.0f}ms query, {wait_s * 1000:.0f}ms lock wait | {q}", flush=True)
+    except Exception:
+        pass
 
 
 db = Database()

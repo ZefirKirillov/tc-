@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api } from './api'
+import { api, keep, peek } from './api'
 import { Ico } from './icons'
 import MainAction from './MainAction'
 import { haptic, notifyOk, type MainCfg } from './tg'
@@ -13,7 +13,7 @@ function num(s: string): number {
 
 export default function Diet() {
   const b = useBanner()
-  const [data, setData] = useState<any>(null)
+  const [data, setData] = useState<any>(() => peek('diet') ?? null)
   const [loadErr, setLoadErr] = useState<unknown>(null)
   const [desc, setDesc] = useState('')
   const [cal, setCal] = useState('')
@@ -22,7 +22,7 @@ export default function Diet() {
   const [photoBusy, setPhotoBusy] = useState(false)
   const [photoPrev, setPhotoPrev] = useState<{ url: string; description: string; calories: number | null } | null>(null)
   const [manualCal, setManualCal] = useState('')
-  const [body, setBody] = useState<any>(null)
+  const [body, setBody] = useState<any>(() => peek('body') ?? null)
   const [weight, setWeight] = useState('')
   const [fat, setFat] = useState('')
   const [bodyBusy, setBodyBusy] = useState(false)
@@ -31,8 +31,8 @@ export default function Diet() {
   async function load() {
     try {
       const [d, bd] = await Promise.all([api.diet(), api.body().catch(() => null)])
-      setData(d)
-      setBody(bd)
+      setData(keep('diet', d))
+      setBody(keep('body', bd))
       setLoadErr(null)
     } catch (e) { if (data) b.setErr(e); else setLoadErr(e) }
   }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api } from './api'
+import { api, keep, peek } from './api'
 import { Ico, type IconName } from './icons'
 import { Empty, fmt, fmtDate, LoadError, Meter, Section, Seg, Skeleton, Skeletons } from './ui'
 
@@ -12,18 +12,18 @@ const CATS: Array<[string, string, IconName]> = [
 ]
 
 export default function Stats() {
-  const [data, setData] = useState<any>(null)
+  const [data, setData] = useState<any>(() => peek('stats:7') ?? null)
   const [loadErr, setLoadErr] = useState<unknown>(null)
   const [days, setDays] = useState(7)
   const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let live = true
-    setData(null)
+    setData(peek(`stats:${days}`) ?? null)
     setLoadErr(null)
     api.stats(days)
-      .then((d) => { if (live) setData(d) })
-      .catch((e) => { if (live) setLoadErr(e) })
+      .then((d) => { if (live) setData(keep(`stats:${days}`, d)) })
+      .catch((e) => { if (live && !peek(`stats:${days}`)) setLoadErr(e) })
     return () => { live = false }
   }, [days, attempt])
 

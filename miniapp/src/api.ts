@@ -108,3 +108,14 @@ export const api = {
   aiAdvice: () => req('/api/ai/advice', { method: 'POST', body: '{}' }),
   aiLast: () => req('/api/ai/last'),
 }
+
+// In-memory cache of the last response per screen: re-opening a tab renders the
+// previous data instantly while a fresh request runs in the background.
+const memo = new Map<string, unknown>()
+export function peek<T = any>(key: string): T | undefined {
+  return memo.get(key) as T | undefined
+}
+export function keep<T>(key: string, value: T): T {
+  memo.set(key, value)
+  return value
+}

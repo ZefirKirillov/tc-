@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api } from './api'
+import { api, keep, peek } from './api'
 import { Ico } from './icons'
 import MainAction from './MainAction'
 import { haptic, hapticSelect, notifyOk } from './tg'
@@ -11,7 +11,7 @@ const WD = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 
 export default function Tasks() {
   const b = useBanner()
-  const [tasks, setTasks] = useState<Task[] | null>(null)
+  const [tasks, setTasks] = useState<Task[] | null>(() => peek('tasks') ?? null)
   const [loadErr, setLoadErr] = useState<unknown>(null)
   const [title, setTitle] = useState('')
   const [prio, setPrio] = useState(false)
@@ -23,7 +23,7 @@ export default function Tasks() {
   const [delId, setDelId] = useState<number | null>(null)
 
   async function load() {
-    try { setTasks(await api.tasks()); setLoadErr(null) }
+    try { setTasks(keep('tasks', await api.tasks())); setLoadErr(null) }
     catch (e) { if (tasks) b.setErr(e); else setLoadErr(e) }
   }
   useEffect(() => { load() }, [])

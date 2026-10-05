@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api } from './api'
+import { api, keep, peek } from './api'
 import { Ico } from './icons'
 import MainAction from './MainAction'
 import { haptic, hapticSelect, inTelegram, notifyOk, useBackButton, type MainCfg } from './tg'
@@ -57,15 +57,28 @@ function PlanPreview({ plan }: { plan: any }) {
   )
 }
 
+// Where the session stands, derived from a /api/workout response.
+function sessionState(d: any) {
+  if (!d) return { idx: 0, sessionId: null as number | null, finished: false }
+  const logged = new Set((d.logs ?? []).map((x: any) => x.exercise_name))
+  const exs: any[] = d.today_exercises ?? []
+  let idx = exs.findIndex((e) => !logged.has(exName(e)))
+  if (idx === -1) idx = exs.length
+  // A finished session is still "today's session" on the server — it must not reopen.
+  const finished = d.session?.status === 'done'
+  return { idx, sessionId: finished ? null : (d.session?.id ?? null) as number | null, finished }
+}
+
 type Wiz = { step: number; goal: string; level: string; days: number; notes: string; plan: any; manual: string }
 const NEW_WIZ: Wiz = { step: 0, goal: '', level: '', days: 3, notes: '', plan: null, manual: '' }
 
 export default function Workout() {
   const b = useBanner()
-  const [data, setData] = useState<any>(null)
+  const [data, setDataRaw] = useState<any>(() => peek('workout') ?? null)
   const [loadErr, setLoadErr] = useState<unknown>(null)
-  const [sessionId, setSessionId] = useState<number | null>(null)
-  const [idx, setIdx] = useState(0)
+  const [sessionId, setSessionId] = useState<number | null>(() => sessionState(peek('workout')).sessionId)
+  const [finished, setFinished] = useState(() => sessionState(peek('workout')).finished)
+  const [idx, setIdx] = useState(() => sessionState(peek('workout')).idx)
   const [busy, setBusy] = useState(false)
   const [hist, setHist] = useState<any[] | null>(null)
   const [showHist, setShowHist] = useState(false)
@@ -76,17 +89,19 @@ export default function Workout() {
   const [reviewBusy, setReviewBusy] = useState(false)
   const [accepted, setAccepted] = useState<Set<number>>(new Set())
 
+  function setData(d: any) {
+    setDataRaw(keep('workout', d))
+  }
+
   async function load() {
     try {
       const d = await api.workout()
       setData(d)
       setLoadErr(null)
-      const logged = new Set((d.logs ?? []).map((x: any) => x.exercise_name))
-      const exs: any[] = d.today_exercises ?? []
-      let i = exs.findIndex((e) => !logged.has(exName(e)))
-      if (i === -1) i = exs.length
-      setIdx(i)
-      setSessionId(d.session?.id ?? null)
+      const st = sessionState(d)
+      setIdx(st.idx)
+      setSessionId(st.sessionId)
+      setFinished(st.finished)
     } catch (e) {
       if (data) b.setErr(e)
       else setLoadErr(e)
@@ -108,10 +123,13 @@ export default function Workout() {
     if (!sessionId || idx >= exs.length) return
     setBusy(true)
     try {
-      await api.workoutLog(sessionId, exs[idx], action)
+      const ex = exs[idx]
+      await api.workoutLog(sessionId, ex, action)
       haptic()
+      // Mirror what the server stored (same default result as api_workout_log_ex) — no re-fetch.
+      appendLog(ex, action === 'done' ? 'done' : 'skipped',
+        action === 'done' ? { sets_done: ex.sets, reps_done: ex.reps, weight_done: ex.weight, completed: true } : null)
       setIdx(idx + 1)
-      setData(await api.workout())
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
@@ -120,13 +138,18 @@ export default function Workout() {
     if (!sessionId || idx >= exs.length || !txt.trim()) return
     setBusy(true)
     try {
-      const r = await api.workoutLogText(sessionId, exs[idx], txt.trim())
+      const ex = exs[idx]
+      const r = await api.workoutLogText(sessionId, ex, txt.trim())
       haptic()
       b.setOk(`Записано: ${resultText(r.result)}`)
+      appendLog(ex, 'done', r.result)
       setTxt('')
       setIdx(idx + 1)
-      setData(await api.workout())
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
+  }
+
+  function appendLog(ex: any, status: 'done' | 'skipped', result: any) {
+    setData({ ...data, logs: [...(data.logs ?? []), { exercise_name: exName(ex), status, result, planned: ex }] })
   }
 
   async function finish() {
@@ -139,7 +162,8 @@ export default function Workout() {
       const extra = [r.spark_awarded && '+1 искра', r.rank_up && 'новый ранг'].filter(Boolean).join(' · ')
       b.setOk(`Тренировка завершена. Выполнено: ${r.done}, пропущено: ${r.skipped}${extra ? ` · ${extra}` : ''}`,
         r.spark_awarded || r.rank_up ? 'event' : 'ok')
-      setSessionId(null); setIdx(0)
+      setSessionId(null)
+      setFinished(true)
       await load()
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
@@ -236,7 +260,7 @@ export default function Workout() {
     if (w.step === 3) main = { text: 'Сгенерировать план', onClick: genPlan, busy, disabled: !w.goal || !w.level }
     else if (w.step === 4) main = { text: 'Разобрать план', onClick: parseManual, busy, disabled: w.manual.trim().length < 10 }
     else if (w.step === 5 && w.plan) main = { text: 'Сохранить план', onClick: savePlan, busy }
-  } else if (!restDay && !sessionId && exs.length) {
+  } else if (!restDay && !sessionId && !finished && exs.length) {
     main = { text: `Начать тренировку · ${exs.length} упр.`, onClick: start, busy }
   } else if (active && !allMarked) {
     main = txt.trim()
@@ -350,7 +374,20 @@ export default function Workout() {
           text={data.next ? `Следующая тренировка — ${data.next.day}, ${data.next.date}.` : 'Восстановление — тоже часть плана.'} />
       )}
 
-      {!restDay && !sessionId && (
+      {!restDay && finished && (
+        <div className="panel" style={{ display: 'flex', gap: 12, alignItems: 'center', borderColor: 'var(--accent-line)' }}>
+          <Ico.flag size={22} className="accent" />
+          <div className="grow">
+            <div style={{ fontWeight: 600 }}>Тренировка на сегодня завершена</div>
+            <div className="row-meta">
+              Выполнено {logs.filter((l) => l.status === 'done').length}, пропущено {logs.filter((l) => l.status === 'skipped').length}
+              {data.next ? ` · следующая — ${data.next.day}, ${data.next.date}` : ''}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!restDay && !sessionId && !finished && (
         <Section label={`Сегодня · ${exs.length} упр.`}>
           <div className="rows">
             {exs.map((e, i) => (
@@ -401,26 +438,27 @@ export default function Workout() {
             <Empty icon="flag" title="Все упражнения отмечены" text="Заверши сессию, чтобы засчитать тренировку и получить искру." />
           )}
 
-          {logs.length > 0 && (
-            <Section label="Сессия" aux={<span className="num muted" style={{ fontSize: 12 }}>{logs.length}/{exs.length}</span>}>
-              <div className="rows">
-                {exs.map((e, i) => {
-                  const l = logByName.get(exName(e))
-                  if (!l) return null
-                  return (
-                    <div key={i} className="row">
-                      <span className="row-idx num">{String(i + 1).padStart(2, '0')}</span>
-                      <span className="grow wrap" style={{ color: l.status === 'done' ? undefined : 'var(--text-2)' }}>{exName(e)}</span>
-                      {l.status === 'done'
-                        ? <span className="status-tag is-done">{resultText(l.result) || 'готово'}</span>
-                        : <span className="status-tag is-skip">пропуск</span>}
-                    </div>
-                  )
-                })}
-              </div>
-            </Section>
-          )}
         </>
+      )}
+
+      {(active || finished) && logs.length > 0 && (
+        <Section label="Сессия" aux={<span className="num muted" style={{ fontSize: 12 }}>{logs.length}/{exs.length}</span>}>
+          <div className="rows">
+            {exs.map((e, i) => {
+              const l = logByName.get(exName(e))
+              if (!l) return null
+              return (
+                <div key={i} className="row">
+                  <span className="row-idx num">{String(i + 1).padStart(2, '0')}</span>
+                  <span className="grow wrap" style={{ color: l.status === 'done' ? undefined : 'var(--text-2)' }}>{exName(e)}</span>
+                  {l.status === 'done'
+                    ? <span className="status-tag is-done">{resultText(l.result) || 'готово'}</span>
+                    : <span className="status-tag is-skip">пропуск</span>}
+                </div>
+              )
+            })}
+          </div>
+        </Section>
       )}
 
       <MainAction cfg={main} />
