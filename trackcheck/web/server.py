@@ -23,6 +23,7 @@ from trackcheck.web.static_serve import register_static
 # Диагностика скорости Mini App (stdout → Render logs). API_SLOW_MS=0 выключает.
 _API_SLOW_MS = float(os.getenv("API_SLOW_MS", "300"))
 _LOOP_LAG_MS = float(os.getenv("LOOP_LAG_MS", "200"))
+_bg_tasks: set = set()
 
 
 @web.middleware
@@ -99,5 +100,5 @@ async def start_web_server():
     await web.TCPSite(runner, HOST, port).start()
     print(f"[BOOT] Web слушает {HOST}:{port} (/healthz, /api, /app)")
     if _LOOP_LAG_MS > 0:
-        runner._lag_task = asyncio.create_task(_watch_loop_lag())  # keep a reference
+        _bg_tasks.add(asyncio.create_task(_watch_loop_lag()))  # strong ref: loop keeps only weak ones
     return runner
