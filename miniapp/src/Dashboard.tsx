@@ -5,7 +5,7 @@ import CheckIn, { CATS, MANUAL } from './CheckIn'
 import { Ico } from './icons'
 import { cloudGet, cloudSet, hapticSelect } from './tg'
 import Tour from './Tour'
-import { fmt, fmtDate, Meter, plural, useBanner } from './ui'
+import { fmt, fmtDate, Meter, plural, Spinner, useBanner } from './ui'
 
 const TOUR_KEY = 'tc_tour_v1'
 
@@ -237,7 +237,7 @@ export default function Dashboard({ me, setMe, go, openCheckin, askAI }: {
               {tasks == null ? '…' : allTasks.length === 0 ? '' : `${allTasks.length - openTasks.length}/${allTasks.length}`}
             </span>
           </span>
-          {tasks == null ? <span className="muted">Загрузка…</span>
+          {tasks == null ? <span className="muted hstack" style={{ gap: 8 }}><Spinner /> Загрузка…</span>
             : openTasks.length === 0 ? <span className="muted">{allTasks.length ? 'Всё сделано 🎉' : 'Задач пока нет'}</span>
             : (
               <span className="w-list">
@@ -258,7 +258,8 @@ export default function Dashboard({ me, setMe, go, openCheckin, askAI }: {
 
       {checkin !== null && (
         <CheckIn me={me} setMe={setMe} start={checkin >= 0 ? checkin : undefined}
-          onClose={() => setCheckin(null)} onError={b.setErr} />
+          onClose={() => setCheckin(null)} onError={b.setErr}
+          onSpark={() => { b.setOk('День отмечен — искра зажжена 🔥', 'event'); api.me().then(setMe).catch(() => {}) }} />
       )}
       {tour && <Tour onDone={endTour} />}
     </div>

@@ -3,7 +3,7 @@ import { api, keep, peek } from './api'
 import { Ico } from './icons'
 import MainAction from './MainAction'
 import { haptic } from './tg'
-import { Empty, Section, Skeletons, useBanner } from './ui'
+import { Empty, Section, Skeletons, Spinner, useBanner } from './ui'
 
 export default function AI({ initialQuestion, onConsumed }: { initialQuestion?: string; onConsumed?: () => void } = {}) {
   const b = useBanner()
@@ -51,7 +51,7 @@ export default function AI({ initialQuestion, onConsumed }: { initialQuestion?: 
       {b.BannerEl}
 
       <button onClick={() => ask(true)} disabled={busy} className="cta" style={{ marginTop: 0 }}>
-        <Ico.ai size={22} className="cta-icon" />
+        {busy ? <Spinner className="cta-icon" fallback={<Ico.ai size={22} className="cta-icon" />} /> : <Ico.ai size={22} className="cta-icon" />}
         <span className="grow">
           <span style={{ fontWeight: 600, display: 'block' }}>{busy ? 'CheckAI думает…' : 'Совет на сегодня'}</span>
           <span className="row-meta">По твоим оценкам, тренировкам и питанию</span>

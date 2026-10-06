@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import { Ico, type IconName } from './icons'
-import { haptic, hapticSelect, notifyOk } from './tg'
-import { Sheet } from './ui'
+import { hapticSelect, notifyOk } from './tg'
+import { pulseOk, Sheet } from './ui'
 
 export const CATS: Array<[string, string, IconName, string]> = [
   // key (API), label, icon, question — order matches the ring on "Обзор"
@@ -18,40 +18,62 @@ const AUTO = new Set(['еда', 'активность'])
 export const MANUAL = CATS.filter(([k]) => !AUTO.has(k))
 const AUTO_CATS = CATS.filter(([k]) => AUTO.has(k))
 
+// Background saves outlive the sheet (it closes right after the last tap).
+let saveQueue: Promise<unknown> = Promise.resolve()
+const pending: Record<string, number> = {}
+
 /** One category at a time, big targets, auto-advance to the next unrated one.
- *  Completing the day (spark awarded) shows a short celebration. */
-export default function CheckIn({ me, setMe, onClose, onError, start }: {
-  me: any; setMe: (f: (m: any) => any) => void; onClose: () => void; onError: (e: unknown) => void; start?: number
+ *  A tap counts instantly; saving runs in the background (rolled back on error).
+ *  Completing the day (spark awarded) shows a short celebration — or, if the sheet
+ *  is already closed by then, onSpark lets the screen announce it. */
+export default function CheckIn({ me, setMe, onClose, onError, onSpark, start }: {
+  me: any; setMe: (f: (m: any) => any) => void; onClose: () => void; onError: (e: unknown) => void
+  onSpark?: () => void; start?: number
 }) {
   const ratings: Record<string, number> = me.today_ratings ?? {}
   const firstOpen = MANUAL.findIndex(([k]) => !ratings[k])
   const [cur, setCur] = useState(start ?? (firstOpen === -1 ? 0 : firstOpen))
-  const [busy, setBusy] = useState(false)
   const [spark, setSpark] = useState(false)
+  const mounted = useRef(true)
+  const celebrating = useRef(false)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
 
   const [key, label, icon, question] = MANUAL[cur]
   const Icon = Ico[icon]
   const value = ratings[key] ?? 0
 
-  async function rate(v: number) {
-    if (busy) return
-    setBusy(true)
-    haptic()
-    try {
-      const res = await api.saveRating(key, v)
-      const merged: Record<string, number> = res.ratings ?? { ...ratings, [key]: v }
-      setMe((m: any) => ({ ...m, today_ratings: merged }))
-      if (res.spark_awarded) { notifyOk(); setSpark(true) }
-      // next unrated category, searching forward from the current one (wrapping around)
-      const order = MANUAL.map((_, i) => (cur + 1 + i) % MANUAL.length).filter((i) => i !== cur)
-      const next = order.find((i) => !merged[MANUAL[i][0]]) ?? -1
-      if (next !== -1) window.setTimeout(() => setCur(next), 220)
-      else if (!res.spark_awarded) window.setTimeout(onClose, 450) // everything rated — get out of the way
-    } catch (e) {
+  function rate(v: number) {
+    const k = key
+    const prev = ratings[k]
+    const merged: Record<string, number> = { ...ratings, [k]: v }
+    pending[k] = v
+    setMe((m: any) => ({ ...m, today_ratings: { ...(m.today_ratings ?? {}), [k]: v } }))
+    pulseOk(`.ci-dot[data-k="${k}"]`)
+    // next unrated category, searching forward from the current one (wrapping around)
+    const order = MANUAL.map((_, i) => (cur + 1 + i) % MANUAL.length).filter((i) => i !== cur)
+    const next = order.find((i) => !merged[MANUAL[i][0]]) ?? -1
+    if (next !== -1) window.setTimeout(() => { if (mounted.current) setCur(next) }, 260)
+    else window.setTimeout(() => { if (mounted.current && !celebrating.current) onClose() }, 550) // everything rated — get out of the way
+
+    // Saves go one after another, so the last tap is also the last one the server sees.
+    saveQueue = saveQueue.then(() => api.saveRating(k, v)).then((res) => {
+      if (pending[k] === v) delete pending[k]
+      // server values (incl. auto «еда»/«активность»), but never over a newer local tap
+      if (res.ratings) setMe((m: any) => ({ ...m, today_ratings: { ...res.ratings, ...pending } }))
+      if (res.spark_awarded) {
+        if (mounted.current) { celebrating.current = true; notifyOk(); setSpark(true) } else onSpark?.()
+      }
+    }, (e) => {
+      if (pending[k] === v) {
+        delete pending[k]
+        setMe((m: any) => {
+          const r = { ...(m.today_ratings ?? {}) }
+          if (prev) r[k] = prev; else delete r[k]
+          return { ...m, today_ratings: r }
+        })
+      }
       onError(e)
-    } finally {
-      setBusy(false)
-    }
+    })
   }
 
   return (
@@ -60,7 +82,7 @@ export default function CheckIn({ me, setMe, onClose, onError, start }: {
         {MANUAL.map(([k, l, ic], i) => {
           const I = Ico[ic]
           return (
-            <button key={k} role="tab" aria-selected={i === cur} aria-label={l}
+            <button key={k} data-k={k} role="tab" aria-selected={i === cur} aria-label={l}
               className={`ci-dot${ratings[k] ? ' is-rated' : ''}${i === cur ? ' is-cur' : ''}`}
               onClick={() => { hapticSelect(); setCur(i) }}>
               {ratings[k] ? <span className="num" style={{ fontSize: 13 }}>{ratings[k]}</span> : <I size={16} />}
@@ -83,9 +105,9 @@ export default function CheckIn({ me, setMe, onClose, onError, start }: {
             <h2>{label}</h2>
             <div className="muted">{question}</div>
           </div>
-          <div className="ci-grid" role="radiogroup" aria-label={label} style={busy ? { opacity: 0.6 } : undefined}>
+          <div className="ci-grid" role="radiogroup" aria-label={label}>
             {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => (
-              <button key={v} role="radio" aria-checked={value === v} disabled={busy}
+              <button key={v} role="radio" aria-checked={value === v}
                 className={`ci-val${value === v ? ' is-on' : ''}`} onClick={() => rate(v)}>
                 {v}
               </button>

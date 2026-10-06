@@ -2,11 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { api, keep, peek } from './api'
 import { Ico } from './icons'
 import MainAction from './MainAction'
-import { haptic, notifyOk, type MainCfg } from './tg'
+import { haptic, type MainCfg } from './tg'
 import DietSetup from './DietSetup'
-import { Empty, fmt, LoadError, Meter, Section, Seg, Sheet, Skeleton, Skeletons, useBanner } from './ui'
+import { Empty, fmt, LoadError, Meter, pulseOk, Section, Seg, Sheet, Skeleton, Skeletons, Spinner, useBanner } from './ui'
 
 const MEALS: Array<[string, string]> = [['Завтрак', 'Завтрак'], ['Обед', 'Обед'], ['Ужин', 'Ужин'], ['Еда', 'Еда']]
+
+// what changes when food is logged: the day total and the new (last) journal entry
+const FOOD_PULSE = '[data-pulse="diet-day"], [data-pulse="diet-log"] > .row:last-child'
 
 function num(s: string): number {
   return parseFloat(s.replace(',', '.'))
@@ -53,9 +56,9 @@ export default function Diet() {
       await api.logFood(desc.trim(), calories, meal)
       setDesc(''); setCal('')
       setAdding(false)
-      notifyOk()
       b.setOk('Записано.')
       await load()
+      pulseOk(FOOD_PULSE)
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
@@ -84,9 +87,9 @@ export default function Diet() {
       await api.logFood(photoPrev.description, calories, meal)
       setPhotoPrev(null); setManualCal('')
       setAdding(false)
-      notifyOk()
       b.setOk('Записано.')
       await load()
+      pulseOk(FOOD_PULSE)
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
@@ -99,9 +102,9 @@ export default function Diet() {
       await api.saveBody(w, f)
       setWeight(''); setFat('')
       setBodyOpen(false)
-      notifyOk()
       b.setOk('Замер сохранён.')
       await load()
+      pulseOk('[data-pulse="body"]')
     } catch (e) { b.setErr(e) } finally { setBodyBusy(false) }
   }
 
@@ -138,7 +141,7 @@ export default function Diet() {
     <div>
       {!sheetOpen && b.BannerEl}
 
-      <div className="panel">
+      <div className="panel" data-pulse="diet-day">
         <div className="hstack spread" style={{ alignItems: 'baseline' }}>
           <span className="label">Сегодня</span>
           <span className="label" style={left < 0 ? { color: 'var(--danger)' } : undefined}>
@@ -157,7 +160,7 @@ export default function Diet() {
         {entries.length === 0
           ? <Empty icon="food" title="Пока ничего не записано" text="Нажми «Добавить еду» — текстом или по фото." />
           : (
-            <div className="rows">
+            <div className="rows" data-pulse="diet-log">
               {entries.map((e, i) => (
                 <div key={i} className="row">
                   <div className="grow wrap">
@@ -173,7 +176,7 @@ export default function Diet() {
 
       <Section label="Тело">
         <div className="cells">
-          <button className="cell" onClick={() => setBodyOpen(true)}>
+          <button className="cell" data-pulse="body" onClick={() => setBodyOpen(true)}>
             <span className="cell-icon is-metal"><Ico.scale size={20} /></span>
             <span className="grow">
               <span className="cell-title" style={{ display: 'block' }}>
@@ -202,7 +205,7 @@ export default function Diet() {
                 <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden
                   onChange={(e) => onPhoto(e.target.files?.[0])} />
                 <button onClick={() => fileRef.current?.click()} disabled={photoBusy} className="btn btn-ghost grow" style={{ minHeight: 44 }}>
-                  <Ico.camera size={18} /> {photoBusy ? 'Смотрю на фото…' : 'По фото'}
+                  {photoBusy ? <><Spinner fallback={<Ico.camera size={18} />} /> Смотрю на фото…</> : <><Ico.camera size={18} /> По фото</>}
                 </button>
               </div>
             </>

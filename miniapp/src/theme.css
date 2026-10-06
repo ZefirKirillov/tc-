@@ -32,6 +32,9 @@
   --warm-soft: rgba(255, 178, 74, 0.13);
   --danger: #ff6b66;
   --danger-soft: rgba(255, 107, 102, 0.12);
+  --ok: #3ddc84;
+  --ok-soft: rgba(61, 220, 132, 0.2);
+  --ok-ring: rgba(61, 220, 132, 0.55);
 
   /* type */
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -87,6 +90,9 @@
   --warm-soft: rgba(200, 111, 12, 0.1);
   --danger: #d23b35;
   --danger-soft: rgba(210, 59, 53, 0.09);
+  --ok: #1f9d55;
+  --ok-soft: rgba(31, 157, 85, 0.16);
+  --ok-ring: rgba(31, 157, 85, 0.45);
   --island: rgba(255, 255, 255, 0.82);
   --island-shadow: 0 10px 28px rgba(20, 40, 55, 0.12), 0 1px 4px rgba(20, 40, 55, 0.08);
   --gold: #c99212;
@@ -536,6 +542,27 @@ textarea.field { min-height: 128px; resize: vertical; line-height: 1.45; font-si
 @keyframes tc-in { from { opacity: 0; transform: translateY(-4px); } }
 @keyframes tc-fade { from { opacity: 0; } }
 @keyframes tc-up { from { transform: translateY(24px); opacity: 0; } }
+@keyframes tc-spin { to { transform: rotate(360deg); } }
+/* success: green wash + a ring that expands and fades (see pulseOk in ui.tsx) */
+@keyframes tc-ok {
+  0% { box-shadow: 0 0 0 0 var(--ok-ring); background-color: var(--ok-soft); border-color: var(--ok); }
+  70% { box-shadow: 0 0 0 10px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.is-ok { animation: tc-ok 750ms var(--ease); }
+.is-new { animation: tc-in var(--t-med) var(--ease), tc-ok 750ms var(--ease); }
+
+/* busy indicator inside buttons */
+.spin {
+  display: inline-block;
+  width: 1.05em; height: 1.05em;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  opacity: 0.8;
+  animation: tc-spin 0.7s linear infinite;
+}
 .screen { animation: tc-fade var(--t-med) var(--ease); }
 
 @media (prefers-reduced-motion: reduce) {

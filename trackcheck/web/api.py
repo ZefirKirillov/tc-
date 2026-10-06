@@ -87,6 +87,12 @@ async def api_me(request: web.Request):
     user_id = request["tg_user"]["id"]
 
     def _load():
+        # safety net for the 00:01 job (bot was down, plan changed, timezone just set)
+        try:
+            from trackcheck.services.tracker_service import ensure_rest_day_rating
+            ensure_rest_day_rating(user_id)
+        except Exception as e:
+            print(f"[API me] rest-day rating: {e}")
         rank_data = get_or_create_rank_data(user_id)
         rank_id = rank_data["current_rank"]
         sparks_needed, next_total = get_sparks_for_next_rank(rank_id, rank_data["total_sparks"])

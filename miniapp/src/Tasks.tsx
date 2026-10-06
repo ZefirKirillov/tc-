@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { api, keep, peek } from './api'
 import { Ico } from './icons'
 import MainAction from './MainAction'
-import { haptic, hapticSelect, notifyOk } from './tg'
-import { Confirm, Empty, fmtDate, LoadError, Section, Skeletons, useBanner } from './ui'
+import { haptic, hapticSelect } from './tg'
+import { Confirm, Empty, fmtDate, LoadError, pulseOk, Section, Skeletons, useBanner } from './ui'
 
 type Task = { id: number; title: string; is_priority: boolean; deadline: string | null; repeat_days: string | null; is_done: boolean }
 
@@ -22,9 +22,9 @@ export default function Tasks() {
   const [doing, setDoing] = useState<number | null>(null)
   const [delId, setDelId] = useState<number | null>(null)
 
-  async function load() {
-    try { setTasks(keep('tasks', await api.tasks())); setLoadErr(null) }
-    catch (e) { if (tasks) b.setErr(e); else setLoadErr(e) }
+  async function load(): Promise<Task[] | null> {
+    try { const t: Task[] = keep('tasks', await api.tasks()); setTasks(t); setLoadErr(null); return t }
+    catch (e) { if (tasks) b.setErr(e); else setLoadErr(e); return null }
   }
   useEffect(() => { load() }, [])
 
@@ -34,15 +34,19 @@ export default function Tasks() {
     try {
       await api.addTask(title.trim(), prio, deadline || null, repeat.size ? [...repeat] : null)
       setTitle(''); setPrio(false); setDeadline(''); setRepeat(new Set()); setShowOpts(false)
-      notifyOk()
-      await load()
+      const known = new Set((tasks ?? []).map((t) => t.id))
+      const fresh = (await load())?.find((t) => !known.has(t.id))
+      pulseOk(fresh ? `[data-task="${fresh.id}"]` : null)
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
   async function done(id: number) {
+    // Checked off right away; the server catches up in the background.
     setDoing(id)
-    try { await api.doneTask(id); haptic(); notifyOk(); await load() }
-    catch (e) { b.setErr(e) } finally { setDoing(null) }
+    setTasks((ts) => ts && ts.map((t) => (t.id === id ? { ...t, is_done: true } : t)))
+    pulseOk(`[data-task="${id}"]`)
+    try { await api.doneTask(id); await load() }
+    catch (e) { b.setErr(e); await load() } finally { setDoing(null) }
   }
 
   async function del() {
@@ -71,7 +75,7 @@ export default function Tasks() {
   const closed = tasks.filter((t) => t.is_done)
 
   const renderTask = (t: Task) => (
-    <div key={t.id} className="row" style={{ alignItems: 'flex-start', opacity: t.is_done ? 0.55 : 1 }}>
+    <div key={t.id} data-task={t.id} className="row" style={{ alignItems: 'flex-start', opacity: t.is_done ? 0.55 : 1 }}>
       <button className={`check${t.is_done ? ' is-on' : ''}`} role="checkbox" aria-checked={t.is_done}
         aria-label={t.is_done ? 'Выполнена' : 'Отметить выполненной'}
         disabled={t.is_done || doing === t.id} onClick={() => done(t.id)} style={{ marginTop: 1 }}>

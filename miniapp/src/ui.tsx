@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, errText, isNetworkError } from './api'
 import { Ico, type IconName } from './icons'
-import { hapticSelect, notifyErr, useBackButton } from './tg'
+import { hapticSelect, notifyErr, notifyOk, useBackButton } from './tg'
 
 // Shared building blocks: feedback states, skeletons, confirm sheet, formatting.
 
@@ -83,7 +83,37 @@ export function useBanner() {
   }
 }
 
+// ---------- success feedback ----------
+
+/** Completed action: success haptic + green pulse on the target(s) — an element or a CSS
+ *  selector. Runs after the next paint, so it can point at rows that the same state
+ *  update is about to render. */
+export function pulseOk(target?: Element | string | null) {
+  notifyOk()
+  if (!target) return
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const els = typeof target === 'string' ? Array.from(document.querySelectorAll(target)) : [target]
+    els.forEach((el) => {
+      el.classList.remove('is-ok')
+      void (el as HTMLElement).offsetWidth // restart the animation if it is already running
+      el.classList.add('is-ok')
+      window.setTimeout(() => el.classList.remove('is-ok'), 800)
+    })
+  }))
+}
+
 // ---------- loading / empty / error ----------
+
+/** Busy indicator that only appears if the wait lasts longer than `delay` ms —
+ *  a quick request finishes without any spinner flashing. Until then renders `fallback`. */
+export function Spinner({ delay = 500, fallback = null, className = '' }: { delay?: number; fallback?: React.ReactNode; className?: string }) {
+  const [show, setShow] = useState(false)
+  useEffect(() => {
+    const t = window.setTimeout(() => setShow(true), delay)
+    return () => window.clearTimeout(t)
+  }, [delay])
+  return show ? <span className={`spin ${className}`} role="status" aria-label="Загрузка" /> : <>{fallback}</>
+}
 
 export function Skeleton({ h = 74 }: { h?: number }) {
   return <div className="skel" style={{ height: h }} aria-hidden="true" />

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { haptic, useMainButton, useTyping, type MainCfg } from './tg'
+import { Spinner } from './ui'
 
 /** Primary action of the current view.
  *  - default: Telegram MainButton (in-page button in a plain browser) — used inside sheets,
@@ -28,7 +29,7 @@ export default function MainAction({ cfg, float }: { cfg: MainCfg; float?: boole
         <div className="fab">
           <button className="btn btn-primary" disabled={cfg.disabled || cfg.busy}
             onClick={() => { haptic('medium'); cfg.onClick() }}>
-            {cfg.busy ? '…' : cfg.text}
+            {cfg.busy ? <><Spinner /> {cfg.text}</> : cfg.text}
           </button>
         </div>
       </>
@@ -37,7 +38,7 @@ export default function MainAction({ cfg, float }: { cfg: MainCfg; float?: boole
   if (native) return null
   return (
     <button className="btn btn-primary btn-block mt" disabled={cfg.disabled || cfg.busy} onClick={cfg.onClick}>
-      {cfg.busy ? '…' : cfg.text}
+      {cfg.busy ? <><Spinner /> {cfg.text}</> : cfg.text}
     </button>
   )
 }

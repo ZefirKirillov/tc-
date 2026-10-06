@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { api, keep, peek } from './api'
 import { Ico } from './icons'
 import MainAction from './MainAction'
-import { haptic, hapticSelect, inTelegram, notifyOk, useBackButton, type MainCfg } from './tg'
-import { Confirm, Empty, fmt, fmtDate, fmtWeight, LoadError, Section, Sheet, Skeleton, Skeletons, useBanner } from './ui'
+import { haptic, hapticSelect, inTelegram, useBackButton, type MainCfg } from './tg'
+import { Confirm, Empty, fmt, fmtDate, fmtWeight, LoadError, pulseOk, Section, Sheet, Skeleton, Skeletons, Spinner, useBanner } from './ui'
 
 function exName(ex: any) {
   return ex.exercise ?? ex.name ?? '?'
@@ -72,6 +72,9 @@ function sessionState(d: any) {
 type Wiz = { step: number; goal: string; level: string; days: number; notes: string; plan: any; manual: string }
 const NEW_WIZ: Wiz = { step: 0, goal: '', level: '', days: 3, notes: '', plan: null, manual: '' }
 
+/** The rail node and the session row of exercise i — what lights up when it is logged. */
+const exPulse = (i: number) => `.rail-node[data-ex="${i}"], .row[data-ex="${i}"]`
+
 export default function Workout() {
   const b = useBanner()
   const [data, setDataRaw] = useState<any>(() => peek('workout') ?? null)
@@ -116,7 +119,7 @@ export default function Workout() {
     try {
       const r = await api.workoutStart()
       setSessionId(r.session_id)
-      haptic('medium')
+      pulseOk('.ex-now')
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
@@ -127,7 +130,7 @@ export default function Workout() {
     try {
       const ex = exs[idx]
       await api.workoutLog(sessionId, ex, action)
-      haptic()
+      if (action === 'done') pulseOk(exPulse(idx)); else haptic()
       // Mirror what the server stored (same default result as api_workout_log_ex) — no re-fetch.
       appendLog(ex, action === 'done' ? 'done' : 'skipped',
         action === 'done' ? { sets_done: ex.sets, reps_done: ex.reps, weight_done: ex.weight, completed: true } : null)
@@ -142,7 +145,7 @@ export default function Workout() {
     try {
       const ex = exs[idx]
       const r = await api.workoutLogText(sessionId, ex, txt.trim())
-      haptic()
+      pulseOk(exPulse(idx))
       b.setOk(`Записано: ${resultText(r.result)}`)
       appendLog(ex, 'done', r.result)
       setTxt('')
@@ -161,13 +164,13 @@ export default function Workout() {
     setBusy(true)
     try {
       const r = await api.workoutFinish(sessionId)
-      notifyOk()
       const extra = [r.spark_awarded && '+1 искра', r.rank_up && 'новый ранг'].filter(Boolean).join(' · ')
       b.setOk(`Тренировка завершена. Выполнено: ${r.done}, пропущено: ${r.skipped}${extra ? ` · ${extra}` : ''}`,
         r.spark_awarded || r.rank_up ? 'event' : 'ok')
       setSessionId(null)
       setFinished(true)
       await load()
+      pulseOk('[data-pulse="finished"]')
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
@@ -204,9 +207,9 @@ export default function Workout() {
     try {
       await api.workoutSavePlan(wiz.plan, wiz.manual ? 'manual' : 'ai', wiz.goal, wiz.level, wiz.days)
       setWiz(null)
-      notifyOk()
       b.setOk('План сохранён.')
       await load()
+      pulseOk('[data-pulse="today"]')
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
@@ -230,9 +233,9 @@ export default function Workout() {
       const r = await api.workoutApplyReview(acc)
       setReview(null)
       setTools(null)
-      notifyOk()
       b.setOk(`Применено замен: ${r.applied}`)
       await load()
+      pulseOk('[data-pulse="today"]')
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
@@ -385,7 +388,7 @@ export default function Workout() {
       )}
 
       {!restDay && finished && (
-        <div className="panel" style={{ display: 'flex', gap: 12, alignItems: 'center', borderColor: 'var(--accent-line)' }}>
+        <div className="panel" data-pulse="finished" style={{ display: 'flex', gap: 12, alignItems: 'center', borderColor: 'var(--accent-line)' }}>
           <Ico.flag size={22} className="accent" />
           <div className="grow">
             <div style={{ fontWeight: 600 }}>Тренировка на сегодня завершена</div>
@@ -399,7 +402,7 @@ export default function Workout() {
 
       {!restDay && !sessionId && !finished && (
         <Section label={`Сегодня · ${exs.length} упр.`}>
-          <div className="rows">
+          <div className="rows" data-pulse="today">
             {exs.map((e, i) => (
               <div key={i} className="row">
                 <span className="row-idx num">{String(i + 1).padStart(2, '0')}</span>
@@ -417,7 +420,7 @@ export default function Workout() {
             {exs.map((e, i) => {
               const st = logByName.get(exName(e))?.status
               const cls = st === 'done' ? 'is-done' : st === 'skipped' ? 'is-skip' : i === idx ? 'is-cur' : ''
-              return <i key={i} className={`rail-node ${cls}`} />
+              return <i key={i} data-ex={i} className={`rail-node ${cls}`} />
             })}
           </div>
 
@@ -465,7 +468,7 @@ export default function Workout() {
               const l = logByName.get(exName(e))
               if (!l) return null
               return (
-                <div key={i} className="row">
+                <div key={i} data-ex={i} className="row">
                   <span className="row-idx num">{String(i + 1).padStart(2, '0')}</span>
                   <span className="grow wrap" style={{ color: l.status === 'done' ? undefined : 'var(--text-2)' }}>{exName(e)}</span>
                   {l.status === 'done'
@@ -546,7 +549,7 @@ export default function Workout() {
                   })}
                 </div>
                 <button onClick={applyReview} disabled={busy || accepted.size === 0} className="btn btn-primary btn-block mt">
-                  Применить · {accepted.size}
+                  {busy && <Spinner />} Применить · {accepted.size}
                 </button>
               </>
             )}

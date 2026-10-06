@@ -7,7 +7,8 @@
 Активность: насколько хорошо выполнена тренировка по плану.
   - каждое упражнение плана → 0..1 (пропуск = 0; выполнено — сравнение подходов,
     повторов и веса с планом, каждое ≤ 100%); итог — среднее → шкала 1..10;
-  - пропущен день / тренировка не сделана / плана нет → 1; день отдыха → 5.
+  - пропущен день / тренировка не сделана / плана нет → 1; день отдыха → 5
+    (ставится сразу в начале дня, а не в 23:55).
 Вручную эти две категории не ставятся. Когда заполнены все 5 — начисляется искра.
 """
 import re
@@ -132,7 +133,7 @@ def compute_activity_rating(user_id: int, final: bool) -> Optional[int]:
         return 1
     today_plan = get_today_plan(plan_data, user_id)
     if not today_plan and not session:
-        return 5 if final else None  # день отдыха
+        return 5  # день отдыха — оценка известна с утра
     if not session:
         return 1 if final else None  # тренировочный день, не начинал
     if session.get("status") != "done" and not final:
@@ -163,6 +164,39 @@ def sync_activity_rating_for_today(user_id: int):
     _save_auto(user_id, "активность", compute_activity_rating(user_id, final=False))
 
 
+def ensure_rest_day_rating(user_id: int):
+    """День отдыха → «активность» = 5 с начала дня. Только если оценки ещё нет —
+    вызывается часто (открытие Mini App), уже выставленное не перезаписываем."""
+    if "активность" in get_today_ratings(user_id):
+        return
+    plan_data = get_ai_plan(user_id)
+    if not plan_data or get_today_session(user_id) or get_today_plan(plan_data, user_id):
+        return
+    _save_auto(user_id, "активность", 5)
+
+
+async def start_daily_ratings_for_timezone(tz_name: str):
+    """Планировщик, 00:01 по местному времени: день отдыха сразу получает 5."""
+    from trackcheck.utils.concurrency import run_db
+    await run_db(_start_daily_ratings_sync, tz_name)
+
+
+def _start_daily_ratings_sync(tz_name: str):
+    for user_id in _user_ids_for_timezone(tz_name):
+        try:
+            ensure_rest_day_rating(user_id)
+        except Exception as e:
+            print(f"[START RATINGS] user={user_id}: {e}")
+
+
+def _user_ids_for_timezone(tz_name: str) -> list:
+    if tz_name == DEFAULT_TIMEZONE:
+        cursor = db.execute("SELECT user_id FROM user_settings WHERE timezone = ? OR timezone IS NULL", (tz_name,))
+    else:
+        cursor = db.execute("SELECT user_id FROM user_settings WHERE timezone = ?", (tz_name,))
+    return [r[0] for r in cursor.fetchall()]
+
+
 
 async def finalize_daily_ratings_for_timezone(tz_name: str):
     """Обёртка для планировщика: вся работа с БД — в пуле потоков, чтобы цикл
@@ -175,12 +209,7 @@ def _finalize_daily_ratings_sync(tz_name: str):
     """Раз в сутки (23:55 по местному времени каждого часового пояса): итоговые
     оценки «еда» и «активность» за день по правилам выше (перезаписывают дневные)."""
     try:
-        if tz_name == DEFAULT_TIMEZONE:
-            cursor = db.execute("SELECT user_id FROM user_settings WHERE timezone = ? OR timezone IS NULL", (tz_name,))
-        else:
-            cursor = db.execute("SELECT user_id FROM user_settings WHERE timezone = ?", (tz_name,))
-        user_ids = [r[0] for r in cursor.fetchall()]
-        for user_id in user_ids:
+        for user_id in _user_ids_for_timezone(tz_name):
             try:
                 _save_auto(user_id, "еда", compute_diet_rating(user_id, final=True))
                 _save_auto(user_id, "активность", compute_activity_rating(user_id, final=True))

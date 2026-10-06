@@ -12,7 +12,8 @@ from trackcheck.database.connection import db, init_db
 from trackcheck.web.server import start_web_server
 from trackcheck.utils.logging import (log_db_persistence_diagnostics,
                                        log_ratings_ai_diagnostics)
-from trackcheck.services.tracker_service import finalize_daily_ratings_for_timezone
+from trackcheck.services.tracker_service import (finalize_daily_ratings_for_timezone,
+                                                 start_daily_ratings_for_timezone)
 from trackcheck.handlers import router
 
 
@@ -55,6 +56,11 @@ async def main():
             finalize_daily_ratings_for_timezone, 'cron',
             hour=23, minute=55, timezone=ZoneInfo(tz_name),
             args=[tz_name], id=f"finalize_ratings_{tz_name}", replace_existing=True
+        )
+        scheduler.add_job(
+            start_daily_ratings_for_timezone, 'cron',
+            hour=0, minute=1, timezone=ZoneInfo(tz_name),
+            args=[tz_name], id=f"start_ratings_{tz_name}", replace_existing=True
         )
 
     async def _notify_hourly():
