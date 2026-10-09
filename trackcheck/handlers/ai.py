@@ -163,7 +163,7 @@ async def _retry_ai_question(callback, bot, state):
         )
         return
     await callback.message.edit_text(
-        f"🤖 <b>Check AI:</b>\n\n{answer}",
+        f"<b>Check:</b>\n\n{answer}",
         parse_mode="HTML", reply_markup=ai_reply_keyboard()
     )
     await run_db(save_last_ai_answer, user_id, answer)
@@ -229,7 +229,7 @@ async def _retry_low_rating(callback, bot, state):
             reply_markup=retry_ai_keyboard("low_rating")
         )
         return
-    msg = await callback.message.answer(f"🤖 {analysis}", reply_markup=ai_reply_keyboard())
+    msg = await callback.message.answer(analysis, reply_markup=ai_reply_keyboard())
     save_last_ai_answer(user_id, analysis)
 
 
@@ -449,7 +449,7 @@ async def handle_ai(callback: CallbackQuery, bot: Bot, state: FSMContext):
     # Удаляем оставшиеся временные сообщения других разделов (фото/замеры/ИИ сохраняются)
     await delete_temp_messages(bot, user_id, callback.message.chat.id, keep_ai=True)
     temps = user_temp_messages.setdefault(user_id, {})
-    msg = await callback.message.answer("🤖 CheckAI тут, чем помочь?", reply_markup=ai_reply_keyboard())
+    msg = await callback.message.answer("Check тут, чем помочь?", reply_markup=ai_reply_keyboard())
     temps['ai_advisor'] = msg.message_id
     nav_push(user_id, "ai")
     await state.set_state(AIAdvisorState.waiting_for_question)
@@ -608,14 +608,14 @@ async def process_ai_question(message: Message, bot: Bot, state: FSMContext):
     # Ответ ИИ с reply кнопкой - редактируем то же сообщение (не отправляем новое)
     try:
         await bot.edit_message_text(
-            f"🤖 <b>Check AI:</b>\n\n{answer}",
+            f"<b>Check:</b>\n\n{answer}",
             message.chat.id, ai_msg_id,
             parse_mode="HTML", reply_markup=ai_reply_keyboard()
         )
     except Exception as e:
         # Если редактирование не удалось - удаляем старое и отправляем новое
         await delete_message_safe(bot, message.chat.id, ai_msg_id)
-        msg = await message.answer(f"🤖 <b>Check AI:</b>\n\n{answer}",
+        msg = await message.answer(f"<b>Check:</b>\n\n{answer}",
                                     parse_mode="HTML", reply_markup=ai_reply_keyboard())
         ai_msg_id = msg.message_id
     temps['ai_response'] = ai_msg_id
@@ -629,7 +629,7 @@ async def show_last_ai(callback: CallbackQuery, bot: Bot, state: FSMContext):
     user_id = callback.from_user.id
     last_answer = await run_db(get_last_ai_answer, user_id)
     if last_answer:
-        await callback.message.answer(f"🤖 <b>Последний ответ ИИ:</b>\n\n{last_answer}", parse_mode="HTML", reply_markup=ai_reply_keyboard())
+        await callback.message.answer(f"<b>Последний ответ ИИ:</b>\n\n{last_answer}", parse_mode="HTML", reply_markup=ai_reply_keyboard())
     else:
         await callback.answer("Нет сохранённого ответа", show_alert=True)
 

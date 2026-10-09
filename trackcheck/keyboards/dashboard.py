@@ -19,7 +19,7 @@ def main_menu_keyboard():
         [InlineKeyboardButton(text="📒 Рефлексия", callback_data="menu_reflection"),
          InlineKeyboardButton(text="⭐ Ранг", callback_data="menu_rank")],
         [InlineKeyboardButton(text="🏋️ Тренировки", callback_data="menu_workouts"),
-         InlineKeyboardButton(text="Check AI", callback_data="menu_ai")],
+         InlineKeyboardButton(text="Check", callback_data="menu_ai")],
         [InlineKeyboardButton(text="🍽 Диета", callback_data="menu_diet"),
          InlineKeyboardButton(text="📝 Задачи", callback_data="menu_tasks")],
     ])

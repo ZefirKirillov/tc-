@@ -296,11 +296,11 @@ export default function Workout() {
 
         {w.step === 0 && (
           <Empty icon="dumbbell" title="Плана тренировок пока нет"
-            text="Собери план с CheckAI за три шага или вставь свой текстом."
+            text="Собери план с Check за три шага или вставь свой текстом."
             action={
               <div className="btn-bar" style={{ width: '100%', maxWidth: 320 }}>
                 <button onClick={() => { hapticSelect(); set({ step: 1 }) }} className="btn btn-primary">
-                  <Ico.ai size={18} /> С CheckAI
+                  <Ico.ai size={18} /> С Check
                 </button>
                 <button onClick={() => { hapticSelect(); set({ step: 4 }) }} className="btn btn-ghost">
                   <Ico.pen size={18} /> Свой текст
@@ -440,7 +440,7 @@ export default function Workout() {
                   <input value={txt} onChange={(e) => setTxt(e.target.value)} className="field" autoFocus
                     placeholder="Как сделал: 80х5, 80х5, 75х6" maxLength={500} disabled={busy}
                     onKeyDown={(e) => { if (e.key === 'Enter' && txt.trim()) logText() }} />
-                  <div className="row-meta" style={{ marginTop: 6 }}>CheckAI разберёт подходы, повторы и вес.</div>
+                  <div className="row-meta" style={{ marginTop: 6 }}>Check разберёт подходы, повторы и вес.</div>
                 </div>
               ) : null}
               <div className="hstack mt" style={{ gap: 4, marginLeft: -8 }}>
@@ -492,12 +492,12 @@ export default function Workout() {
             <button className="cell" onClick={loadReview}>
               <span className="cell-icon"><Ico.repeat size={20} /></span>
               <span className="grow"><span className="cell-title" style={{ display: 'block' }}>Ревью месяца</span>
-                <span className="cell-sub" style={{ display: 'block' }}>CheckAI предложит замены упражнений</span></span>
+                <span className="cell-sub" style={{ display: 'block' }}>Check предложит замены упражнений</span></span>
             </button>
             <button className="cell" onClick={() => { hapticSelect(); setTools(null); setWiz({ ...NEW_WIZ, step: 1 }) }}>
               <span className="cell-icon is-metal"><Ico.refresh size={20} /></span>
               <span className="grow"><span className="cell-title" style={{ display: 'block' }}>Новый план</span>
-                <span className="cell-sub" style={{ display: 'block' }}>Собрать заново с CheckAI или своим текстом</span></span>
+                <span className="cell-sub" style={{ display: 'block' }}>Собрать заново с Check или своим текстом</span></span>
             </button>
           </div>
         </Sheet>
@@ -526,7 +526,7 @@ export default function Workout() {
       {tools === 'review' && (
         <Sheet title="Ревью месяца" onClose={() => setTools(null)}>
           {reviewBusy || !review ? (
-            <div><div className="muted" style={{ marginBottom: 10 }}>CheckAI анализирует месяц…</div><Skeletons n={2} h={56} /></div>
+            <div><div className="muted" style={{ marginBottom: 10 }}>Check анализирует месяц…</div><Skeletons n={2} h={56} /></div>
           ) : review.no_changes_needed || !(review.changes ?? []).length
             ? <Empty icon="check" title="Менять ничего не нужно" text="План в порядке — продолжай в том же темпе." />
             : (

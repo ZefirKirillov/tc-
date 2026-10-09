@@ -53,7 +53,7 @@ export default function AI({ initialQuestion, onConsumed }: { initialQuestion?: 
       <button onClick={() => ask(true)} disabled={busy} className="cta" style={{ marginTop: 0 }}>
         {busy ? <Spinner className="cta-icon" fallback={<Ico.ai size={22} className="cta-icon" />} /> : <Ico.ai size={22} className="cta-icon" />}
         <span className="grow">
-          <span style={{ fontWeight: 600, display: 'block' }}>{busy ? 'CheckAI думает…' : 'Совет на сегодня'}</span>
+          <span style={{ fontWeight: 600, display: 'block' }}>{busy ? 'Check думает…' : 'Совет на сегодня'}</span>
           <span className="row-meta">По твоим оценкам, тренировкам и питанию</span>
         </span>
         <Ico.arrow size={18} className="accent" />
@@ -63,14 +63,14 @@ export default function AI({ initialQuestion, onConsumed }: { initialQuestion?: 
         <textarea value={q} onChange={(e) => setQ(e.target.value)} placeholder="Например: как восстановиться после тяжёлой тренировки ног?"
           className="field" style={{ minHeight: 88 }} maxLength={2000} disabled={busy} />
         {q.length > 1500 && <div className="row-meta num" style={{ textAlign: 'right' }}>{q.length}/2000</div>}
-        <MainAction float cfg={q.trim() ? { text: 'Спросить CheckAI', onClick: () => ask(), busy, disabled: q.trim().length < 3 } : null} />
+        <MainAction float cfg={q.trim() ? { text: 'Спросить Check', onClick: () => ask(), busy, disabled: q.trim().length < 3 } : null} />
       </Section>
 
       <Section label={label}>
         {(loading || busy) && <Skeletons n={1} h={120} />}
         {!loading && !busy && (answer
           ? <div className="panel answer">{answer}</div>
-          : <Empty icon="ai" title="Здесь появится ответ" text="Задай вопрос или попроси совет — CheckAI учитывает твои данные из TrackCheck." />)}
+          : <Empty icon="ai" title="Здесь появится ответ" text="Задай вопрос или попроси совет — Check учитывает твои данные из TrackCheck." />)}
       </Section>
     </div>
   )

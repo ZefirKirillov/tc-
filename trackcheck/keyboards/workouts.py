@@ -117,7 +117,7 @@ def workout_action_choice_keyboard(ex_id: int):
 
 def wp_mode_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=with_back_kb([
-        [InlineKeyboardButton(text="🤖 Создать план с ИИ", callback_data="wp_mode_ai")],
+        [InlineKeyboardButton(text="Создать план с ИИ", callback_data="wp_mode_ai")],
         [InlineKeyboardButton(text="📝 Ввести свой план", callback_data="wp_mode_manual")]
     ]))
 

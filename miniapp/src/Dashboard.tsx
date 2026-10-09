@@ -187,12 +187,12 @@ export default function Dashboard({ me, setMe, go, openCheckin, askAI }: {
       <form className="ask" onSubmit={submitQuestion} data-tour="ask">
         <Ico.ai size={18} className="ask-icon" />
         <input className="ask-input" value={question} onChange={(e) => setQuestion(e.target.value)}
-          placeholder="Спроси CheckAI…" maxLength={2000} enterKeyHint="send" aria-label="Вопрос для CheckAI" />
+          placeholder="Спроси Check…" maxLength={2000} enterKeyHint="send" aria-label="Вопрос для Check" />
         <button type="submit" className="ask-send" disabled={question.trim().length < 3} aria-label="Спросить">
           <Ico.arrow size={18} />
         </button>
       </form>
-      <button className="ask-link" onClick={() => go('ai')}>Открыть CheckAI →</button>
+      <button className="ask-link" onClick={() => go('ai')}>Открыть Check →</button>
 
       <div className="widgets" data-tour="today">
         <div className="w-wide ci-row" data-tour="checkin">

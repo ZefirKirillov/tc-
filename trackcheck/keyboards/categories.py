@@ -23,7 +23,7 @@ def rating_keyboard():
 
 def low_rating_keyboard(category: str):
     keyboard = InlineKeyboardMarkup(inline_keyboard=with_back_kb([
-        [InlineKeyboardButton(text="🤖 Разобрать с ИИ", callback_data=f"analyze_low:{category}")],
+        [InlineKeyboardButton(text="Разобрать с ИИ", callback_data=f"analyze_low:{category}")],
         [InlineKeyboardButton(text="🔙 Пропустить", callback_data="skip_analysis")]
     ]))
     return keyboard

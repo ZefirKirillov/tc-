@@ -787,7 +787,7 @@ textarea.field { min-height: 128px; resize: vertical; line-height: 1.45; font-si
 .w-task { display: flex; align-items: center; gap: 8px; width: 100%; font-size: 15px; min-width: 0; }
 .w-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); flex: none; margin: 0 4px; }
 
-/* CheckAI field under the orbit */
+/* Check field under the orbit */
 .ask {
   display: flex;
   align-items: center;

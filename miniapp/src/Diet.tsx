@@ -212,7 +212,7 @@ export default function Diet() {
               <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Что съел? Например, овсянка 100 г"
                 className="field mt" maxLength={300} />
               <button onClick={estimate} disabled={estBusy || desc.trim().length < 3} className="btn btn-ghost mt" style={{ minHeight: 44, width: '100%' }}>
-                {estBusy ? <><Spinner fallback={<Ico.spark size={18} />} /> Считаю калории…</> : <><Ico.spark size={18} /> Посчитать калории ИИ</>}
+                {estBusy ? <><Spinner fallback={<Ico.spark size={18} />} /> Check считает калории…</> : <><Ico.spark size={18} /> Check, Посчитай калории</>}
               </button>
               <div className="field-row mt">
                 <input value={cal} onChange={(e) => setCal(e.target.value)} placeholder="Ккал" inputMode="decimal"

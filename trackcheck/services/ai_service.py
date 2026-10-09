@@ -1030,7 +1030,7 @@ def generate_weekly_report(user_id: int) -> str:
 │
 │ 🏋️ Тренировок: {workouts_progress(workout_data)}
 │
-│ 🤖 Анализ ИИ:
+│ 💬 Анализ ИИ:
 │    {ai_analysis}
 └─────────────────────"""
     return report

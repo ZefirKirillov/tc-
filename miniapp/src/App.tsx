@@ -12,7 +12,7 @@ import AI from './AI'
 
 export type Tab = 'main' | 'workout' | 'tasks' | 'diet' | 'ai' | 'stats'
 
-// Five tabs in the island (Apple HIG: 3–5). CheckAI is opened from "Обзор".
+// Five tabs in the island (Apple HIG: 3–5). Check is opened from "Обзор".
 const TABS: Array<[Tab, IconName, string]> = [
   ['main', 'orbit', 'Обзор'],
   ['workout', 'dumbbell', 'Тренинг'],
@@ -21,7 +21,7 @@ const TABS: Array<[Tab, IconName, string]> = [
   ['stats', 'chart', 'Прогресс'],
 ]
 const TITLES: Record<Tab, string> = {
-  main: 'Обзор', workout: 'Тренировка', diet: 'Питание', tasks: 'Задачи', stats: 'Прогресс', ai: 'CheckAI',
+  main: 'Обзор', workout: 'Тренировка', diet: 'Питание', tasks: 'Задачи', stats: 'Прогресс', ai: 'Check',
 }
 
 // Deep link from bot notifications: ?tab=workout | diet | tasks | stats | ai | checkin
@@ -45,7 +45,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>(INITIAL_TAB)
   // ?tab=checkin opens the check-in sheet once — not again on every return to "Обзор".
   const [deepCheckin, setDeepCheckin] = useState(DEEP === 'checkin')
-  // Question typed into the CheckAI field on «Обзор» → asked on the CheckAI screen.
+  // Question typed into the Check field on «Обзор» → asked on the Check screen.
   const [pendingAsk, setPendingAsk] = useState('')
   const online = useOnline()
   const typing = useTyping()

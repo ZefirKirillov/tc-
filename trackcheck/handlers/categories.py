@@ -264,7 +264,7 @@ async def analyze_low_rating_handler(callback: CallbackQuery, bot: Bot, state: F
         user_temp_messages[callback.from_user.id] = temps
         await callback.answer()
         return
-    msg = await callback.message.answer(f"🤖 {analysis}", reply_markup=ai_reply_keyboard())
+    msg = await callback.message.answer(analysis, reply_markup=ai_reply_keyboard())
     temps['ai_response'] = msg.message_id
     if all_filled_flag:
         temps['all_categories_filled'] = True

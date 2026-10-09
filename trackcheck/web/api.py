@@ -548,7 +548,7 @@ async def api_workout_history(request: web.Request):
 
 @require_user
 async def api_ai_ask(request: web.Request):
-    """Free-form CheckAI question (slow: Gemini call in thread)."""
+    """Free-form Check question (slow: Gemini call in thread)."""
     from trackcheck.utils.concurrency import run_in_thread
     from trackcheck.database.repositories import get_user_name, save_last_ai_answer
     from trackcheck.services.ai_service import gemini_generate, get_full_context_for_ai

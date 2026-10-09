@@ -109,7 +109,7 @@ async def _screen_rank(bot, user_id, chat_id, state):
 
 async def _screen_ai(bot, user_id, chat_id, state):
     await state.set_state(AIAdvisorState.waiting_for_question)
-    await _screen_send(bot, user_id, chat_id, "🤖 CheckAI тут, чем помочь?", ai_reply_keyboard(), 'ai_advisor')
+    await _screen_send(bot, user_id, chat_id, "Check тут, чем помочь?", ai_reply_keyboard(), 'ai_advisor')
     nav_push(user_id, "ai")
 
 async def _screen_history(bot, user_id, chat_id, state):
