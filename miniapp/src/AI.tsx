@@ -11,6 +11,8 @@ export default function AI({ initialQuestion, onConsumed }: { initialQuestion?: 
   const [answer, setAnswerRaw] = useState<string | null>(() => peek('ai') ?? null)
   const [answerKind, setAnswerKind] = useState<'last' | 'advice' | 'ask'>('last')
   const [busy, setBusy] = useState(false)
+  // Answer being written right now (null until the first words arrive).
+  const [live, setLive] = useState<string | null>(null)
   const [loading, setLoading] = useState(() => peek('ai') === undefined)
 
   const setAnswer = (a: string | null) => setAnswerRaw(keep('ai', a))
@@ -36,12 +38,15 @@ export default function AI({ initialQuestion, onConsumed }: { initialQuestion?: 
     b.clear()
     haptic('medium')
     try {
-      const r = advice ? await api.aiAdvice() : await api.aiAsk(question)
-      setAnswer(r.answer)
       setAnswerKind(advice ? 'advice' : 'ask')
+      setLive(null)
+      // Text appears as the model writes it; the saved answer is set at the end.
+      const onText = (t: string) => setLive(t)
+      const final = advice ? await api.aiAdviceStream(onText) : await api.aiAskStream(question, onText)
+      setAnswer(final)
       if (!advice) setQ('')
       haptic()
-    } catch (e) { b.setErr(e) } finally { setBusy(false) }
+    } catch (e) { b.setErr(e) } finally { setBusy(false); setLive(null) }
   }
 
   const label = answerKind === 'advice' ? 'Совет' : answerKind === 'ask' ? 'Ответ' : 'Последний ответ'
@@ -67,7 +72,9 @@ export default function AI({ initialQuestion, onConsumed }: { initialQuestion?: 
       </Section>
 
       <Section label={label}>
-        {(loading || busy) && <Skeletons n={1} h={120} />}
+        {busy && live
+          ? <div className="panel answer" aria-live="polite">{live}<span className="caret" aria-hidden /></div>
+          : (loading || busy) && <Skeletons n={1} h={120} />}
         {!loading && !busy && (answer
           ? <div className="panel answer">{answer}</div>
           : <Empty icon="ai" title="Здесь появится ответ" text="Задай вопрос или попроси совет — Check учитывает твои данные из TrackCheck." />)}

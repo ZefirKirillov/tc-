@@ -62,6 +62,49 @@ async function reqPhoto(path: string, file: File) {
   return body.data
 }
 
+// Streaming AI answer (NDJSON, one event per line). Calls onText with the
+// whole answer so far; resolves with the final answer.
+async function reqStream(path: string, body: unknown, onText: (text: string) => void): Promise<string> {
+  let res: Response
+  try {
+    res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': getInitData() },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    throw new ApiError('network', 'Нет соединения. Проверь интернет и попробуй ещё раз.')
+  }
+  // Errors before the stream starts (auth, validation) come back as plain JSON.
+  if (!res.ok || !res.body || !(res.headers.get('Content-Type') ?? '').includes('ndjson')) {
+    const data = await res.json().catch(() => ({ ok: false, error: 'bad_response' }))
+    throw fail(data, res.status)
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  let text = ''
+  for (;;) {
+    const { value, done } = await reader.read().catch(() => {
+      throw new ApiError('network', 'Связь оборвалась. Попробуй ещё раз.')
+    })
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let nl: number
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim()
+      buf = buf.slice(nl + 1)
+      if (!line) continue
+      const ev = JSON.parse(line)
+      if (ev.error) throw new ApiError(ev.error, ev.message ?? 'ИИ не ответил. Попробуй ещё раз.')
+      if (ev.done) { onText(ev.answer); return ev.answer }
+      text = ev.t ?? text + (ev.d ?? '')
+      onText(text)
+    }
+  }
+  throw new ApiError('network', 'Связь оборвалась. Попробуй ещё раз.')
+}
+
 export function errText(e: unknown): string {
   if (e instanceof ApiError) return e.message
   return String((e as any)?.message ?? e)
@@ -110,6 +153,10 @@ export const api = {
   aiAsk: (question: string) =>
     req('/api/ai/ask', { method: 'POST', body: JSON.stringify({ question }) }),
   aiAdvice: () => req('/api/ai/advice', { method: 'POST', body: '{}' }),
+  aiAskStream: (question: string, onText: (text: string) => void) =>
+    reqStream('/api/ai/ask?stream=1', { question }, onText),
+  aiAdviceStream: (onText: (text: string) => void) =>
+    reqStream('/api/ai/advice?stream=1', {}, onText),
   aiLast: () => req('/api/ai/last'),
 }
 

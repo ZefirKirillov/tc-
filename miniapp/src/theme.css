@@ -513,6 +513,11 @@ textarea.field { min-height: 128px; resize: vertical; line-height: 1.45; font-si
 .empty .btn { margin-top: 10px; }
 
 .answer { white-space: pre-wrap; font-size: 14.5px; line-height: 1.55; overflow-wrap: anywhere; }
+/* blinking caret at the end of an answer that is still being written */
+.caret { display: inline-block; width: 2px; height: 1.1em; margin-left: 2px; vertical-align: text-bottom;
+  background: var(--accent); animation: caret-blink 1s steps(1) infinite; }
+@keyframes caret-blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .caret { animation: none; } }
 
 /* bottom sheet confirm */
 .sheet-back {

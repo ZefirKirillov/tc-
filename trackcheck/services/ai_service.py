@@ -231,6 +231,151 @@ def _atria_chat(prompt: str, max_tokens: int,
                         extra=extra, timeout=ATRIA_TIMEOUT)
 
 
+def _openai_stream(provider: str, base_url: str, model: str, key: str, prompt: str,
+                   max_tokens: int, extra: Optional[dict] = None, timeout: float = 120):
+    """Стриминговый /chat/completions (SSE): генератор кусков текста по мере
+    генерации. Бросает исключение, если запрос не удался."""
+    def _open(token_key: str):
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": True,
+            token_key: max_tokens,
+            **(extra or {}),
+        }
+        req = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+                "Authorization": f"Bearer {key}",
+            },
+            method="POST",
+        )
+        return urllib.request.urlopen(req, timeout=timeout)
+
+    # Как и в _openai_chat: при 400 на max_tokens пробуем max_completion_tokens.
+    try:
+        resp = _open("max_tokens")
+    except Exception as e:
+        if (getattr(e, "code", None) or getattr(e, "status", None)) != 400:
+            raise
+        print(f"[{provider.upper()}] 400 с max_tokens — повторяю с max_completion_tokens...")
+        resp = _open("max_completion_tokens")
+    with resp:
+        for raw in resp:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+            except ValueError:
+                continue
+            for choice in chunk.get("choices") or []:
+                piece = (choice.get("delta") or {}).get("content")
+                if piece:
+                    yield piece
+
+
+def _without_think(pieces):
+    """Убирает из потока блоки <think>…</think>, даже если теги разрезаны
+    между кусками: недописанное «<thi» в конце придерживаем до следующего куска."""
+    buf, sent = "", 0
+    for piece in pieces:
+        buf += piece
+        visible = re.sub(r"<think>.*?</think>", "", buf, flags=re.S)
+        open_at = visible.find("<think>")
+        if open_at != -1:
+            visible = visible[:open_at]
+        for k in range(min(6, len(visible)), 0, -1):
+            if "<think>".startswith(visible[-k:]):
+                visible = visible[:-k]
+                break
+        visible = visible.lstrip()
+        if len(visible) > sent:
+            yield visible[sent:]
+            sent = len(visible)
+    tail = re.sub(r"<think>.*?</think>", "", buf, flags=re.S).lstrip()
+    if "<think>" not in tail and len(tail) > sent:
+        yield tail[sent:]
+
+
+def gemini_generate_stream(prompt: str, max_tokens: int = 8192,
+                           caller: str = "gemini_generate_stream"):
+    """Потоковая версия gemini_generate: генератор кусков сырого текста.
+
+    Цепочка та же: Atria → NaraRouter (стримингом) → Google (целиком, одним куском).
+    Если провайдер упал до первого куска — пробуем следующий; если посреди
+    ответа — останавливаемся на том, что успели получить. Ничего не выдал —
+    ответа нет, причина в LAST_AI_CALL (см. _friendly_ai_error)."""
+    providers = []
+    if _atria_api_key():
+        effort = {"reasoning_effort": ATRIA_REASONING_EFFORT} if ATRIA_REASONING_EFFORT else None
+        providers.append(("atria", ATRIA_BASE_URL, ATRIA_MODEL, _atria_api_key(),
+                          max(max_tokens, ATRIA_MIN_TOKENS), effort, ATRIA_TIMEOUT))
+    if _nara_api_key():
+        providers.append(("nara", NARA_BASE_URL, NARA_MODEL, _nara_api_key(),
+                          max_tokens, None, 120))
+    if not providers and not _google_api_key():
+        LAST_AI_CALL.update(provider=None, model=None, reason="no_key")
+        return
+    for provider, base_url, model, key, tokens, extra, timeout in providers:
+        tag = provider.upper()
+        started = time.monotonic()
+        emitted = 0
+        try:
+            for piece in _without_think(_openai_stream(provider, base_url, model, key,
+                                                       prompt, tokens, extra, timeout)):
+                emitted += len(piece)
+                yield piece
+        except Exception as e:
+            reason = _describe_http_error(e, provider, model)
+            print(f"[{tag}] Ошибка стрима ({reason}) после {emitted} символов")
+            if emitted:
+                LAST_AI_CALL.update(provider=provider, model=model,
+                                    reason=f"stream cut: {reason}")
+                _log_ai_call(caller)
+                return
+            LAST_AI_CALL.update(provider=None, model=model, reason=f"{provider}: {reason}")
+            continue
+        elapsed = time.monotonic() - started
+        if emitted:
+            LAST_AI_CALL.update(provider=provider, model=model,
+                                reason=f"ok stream {elapsed:.1f}s")
+            print(f"[{tag}] OK stream model={model} {elapsed:.1f}s ({emitted} chars)")
+            _log_ai_call(caller)
+            return
+        LAST_AI_CALL.update(provider=None, model=model,
+                            reason=f"{provider}: empty stream {elapsed:.1f}s")
+        print(f"[{tag}] Пустой стрим — пробую следующего провайдера.")
+    text = _google_generate(prompt, max_tokens, None, False, api_key=_google_api_key())
+    _log_ai_call(caller)
+    if text:
+        yield text
+
+
+async def stream_answer(prompt: str, max_tokens: int = 8192, interval: float = 0.1):
+    """Async-обёртка над gemini_generate_stream для бота и Mini App.
+
+    Отдаёт (текст_целиком_на_данный_момент, done) не чаще раза в `interval`
+    секунд — текст уже очищен strip_markdown, как у gemini_generate.
+    Последним всегда идёт (полный ответ, True); пустой ответ — ИИ не ответил,
+    человекочитаемая причина — _friendly_ai_error()."""
+    from trackcheck.utils.concurrency import iterate_in_thread
+    raw, last = "", 0.0
+    async for piece in iterate_in_thread(gemini_generate_stream, prompt, max_tokens):
+        raw += piece
+        now = time.monotonic()
+        if now - last >= interval:
+            last = now
+            yield strip_markdown(raw), False
+    yield (strip_markdown(raw) if raw.strip() else ""), True
+
+
 def _describe_http_error(e: Exception, provider: str = "nara",
                          model: str = NARA_MODEL) -> str:
     """Короткое объяснение HTTP-ошибки: статус + тело ответа, если есть."""
@@ -460,6 +605,31 @@ def gemini_generate_rating(prompt: str, max_tokens: int = 1024) -> Optional[dict
         traceback.print_exc()
         return None
 
+
+
+# Как Check отвечает: коротко и по делу (пользователи жаловались на «воду»).
+_CHECK_STYLE = """Как отвечать:
+- Сразу суть: 1–3 коротких предложения или до 3 пунктов по одной строке.
+- Без вступлений, приветствий, пересказа вопроса, похвалы ради похвалы и общих фраз вроде «важно слушать своё тело».
+- Данные пользователя упоминай, только если они прямо относятся к делу.
+- Если ответ — «да» или «нет», начни с него.
+- Обратись по имени один раз, не больше одного эмодзи."""
+
+
+def check_question_prompt(name: str, context: str, question: str) -> str:
+    """Промпт Check для свободного вопроса (бот и Mini App)."""
+    return (f"Ты — Check, персональный ассистент трекера TrackCheck. Пользователь {name}.\n\n"
+            f"Данные пользователя:\n{context}\n\n"
+            f"Вопрос: {question}\n\n{_CHECK_STYLE}")
+
+
+def check_advice_prompt(name: str, context: str) -> str:
+    """Промпт Check для «Совета на сегодня» (бот и Mini App)."""
+    return (f"Ты — Check, персональный ассистент трекера TrackCheck. Пользователь {name}.\n\n"
+            f"Данные пользователя:\n{context}\n\n"
+            "Дай один совет на сегодня: что главное заметил в данных и один конкретный шаг. "
+            "Максимум 2–3 коротких предложения, пиши по-русски.\n\n"
+            f"{_CHECK_STYLE}")
 
 
 def food_calories_prompt(description: str) -> str:
@@ -1014,7 +1184,8 @@ def generate_weekly_report(user_id: int) -> str:
     3. Паттерн если виден (связь сна и активности и т.д.)
     4. Мотивирующий совет на следующую неделю
 
-    Используй эмодзи, обращайся по имени, макс 5-6 предложений."""
+    По одному короткому предложению на пункт, без вступлений и общих фраз.
+    Обращайся по имени, не больше одного эмодзи на пункт."""
     ai_analysis = gemini_generate(prompt, max_tokens=2048)
 
     best_day_str = f"{best_day[8:10]}.{best_day[5:7]}" if best_day else '--'

@@ -1,4 +1,5 @@
 import asyncio
+import html
 import os
 import re
 
@@ -21,7 +22,8 @@ from trackcheck.services.ai_service import (
     gemini_generate, gemini_generate_rating, gemini_generate_plan,
     gemini_parse_manual_plan, _fallback_parse_plan, gemini_session_feedback,
     gemini_monthly_review, get_full_context_for_ai, analyze_low_rating,
-    analyze_food_photo, analyze_body_photo, estimate_food_calories,
+    analyze_food_photo, analyze_body_photo, estimate_food_calories, stream_answer,
+    check_question_prompt, check_advice_prompt,
 )
 from trackcheck.services.workout_service import _format_full_plan
 from trackcheck.services.gamification_service import get_rank_name
@@ -86,10 +88,10 @@ async def _retry_mood_rating(callback, bot, state):
 {full_context}
 
 Оцени его(её) настроение сегодня по шкале от 1 до 10 (10 — отличное настроение, 1 — очень плохое).
-Затем напиши короткий (2-4 предложения) тёплый отклик по-русски, обращаясь по имени:
-- если настроение хорошее — искренне порадуйся вместе с ним(ней);
-- если настроение так себе или плохое — мягко поддержи и дай 1-2 конкретных совета,
-  как можно улучшить состояние или разобраться с тяжёлыми эмоциями, учитывая контекст выше.
+Затем напиши тёплый отклик по-русски, обращаясь по имени, — максимум 2 коротких предложения, без вступлений и общих фраз:
+- если настроение хорошее — коротко порадуйся вместе с ним(ней);
+- если настроение так себе или плохое — поддержи и дай один конкретный шаг,
+  учитывая контекст выше.
 Ответь СТРОГО в формате JSON без пояснений и без markdown:
 {{"rating": <целое число 1-10>, "response": "<текст отклика>"}}"""
     result = await run_in_thread(gemini_generate_rating, prompt)
@@ -115,26 +117,83 @@ async def _retry_mood_rating(callback, bot, state):
 
 
 
+async def _stream_ai_reply(bot: Bot, chat_id: int, msg_id: int, prompt: str, header: str):
+    """Пишет ответ ИИ в сообщение msg_id по мере генерации.
+
+    Пока ИИ не начал отвечать — крутится «Думаю…»; дальше текст дописывается
+    примерно раз в секунду (чаще Telegram редактировать не даёт).
+    Возвращает полный ответ или None, если ИИ не ответил. Финальное сообщение
+    с клавиатурой выставляет вызывающий код."""
+    phrases = ["Думаю.", "Думаю..", "Думаю...", "Анализирую.", "Анализирую..", "Анализирую..."]
+    started = asyncio.Event()
+
+    async def animate():
+        i = 0
+        while not started.is_set():
+            try:
+                await bot.edit_message_text(phrases[i % len(phrases)], chat_id, msg_id)
+            except Exception:
+                pass
+            i += 1
+            try:
+                await asyncio.wait_for(started.wait(), 1)
+            except asyncio.TimeoutError:
+                pass
+
+    anim = asyncio.create_task(animate())
+    answer = ""
+    try:
+        async for text, done in stream_answer(prompt, 8192, interval=1.0):
+            if done:
+                answer = text
+                break
+            if not text:
+                continue
+            started.set()
+            try:
+                await bot.edit_message_text(f"{header}\n\n{html.escape(text[:3900])} ▌",
+                                            chat_id, msg_id, parse_mode="HTML")
+            except Exception:
+                pass
+    finally:
+        started.set()
+        anim.cancel()
+        try:
+            await anim
+        except asyncio.CancelledError:
+            pass
+    return answer or None
+
+
+async def _show_ai_answer(bot: Bot, chat_id: int, msg_id: int, header: str, answer: str) -> int:
+    """Финальный вид ответа (с кнопками). Если отредактировать не вышло —
+    шлёт новым сообщением. Возвращает id сообщения с ответом."""
+    text = f"{header}\n\n{html.escape(answer)}"
+    try:
+        await bot.edit_message_text(text, chat_id, msg_id, parse_mode="HTML",
+                                    reply_markup=ai_reply_keyboard())
+        return msg_id
+    except Exception:
+        await delete_message_safe(bot, chat_id, msg_id)
+        msg = await bot.send_message(chat_id, text, parse_mode="HTML",
+                                     reply_markup=ai_reply_keyboard())
+        return msg.message_id
+
+
 async def _retry_ai_advice(callback, bot, state):
     data = await state.get_data()
     user_id = callback.from_user.id
-    name = await run_db(get_user_name, user_id, callback.from_user.first_name)
-    full_context = await run_db(get_full_context_for_ai, user_id)
+    chat_id, msg_id = callback.message.chat.id, callback.message.message_id
     prompt = data.get("retry_ai_prompt", "")
-    try:
-        answer = await run_in_thread(gemini_generate, prompt, 8192)
-    except:
-        answer = "❌ Ошибка ИИ."
-    if answer.startswith("❌"):
+    header = "💡 <b>Совет:</b>"
+    answer = await _stream_ai_reply(bot, chat_id, msg_id, prompt, header)
+    if not answer:
         await callback.message.edit_text(
             f"❌ ИИ не ответил. Попробуй ещё раз.",
             reply_markup=retry_ai_keyboard("ai_advice")
         )
         return
-    await callback.message.edit_text(
-        f"💡 <b>Совет:</b>\n\n{answer}",
-        parse_mode="HTML", reply_markup=ai_reply_keyboard()
-    )
+    await _show_ai_answer(bot, chat_id, msg_id, header, answer)
     await run_db(save_last_ai_answer, user_id, answer)
 
 
@@ -142,30 +201,20 @@ async def _retry_ai_advice(callback, bot, state):
 async def _retry_ai_question(callback, bot, state):
     data = await state.get_data()
     user_id = callback.from_user.id
+    chat_id, msg_id = callback.message.chat.id, callback.message.message_id
     name = await run_db(get_user_name, user_id, callback.from_user.first_name)
     full_context = await run_db(get_full_context_for_ai, user_id)
     question = data.get("retry_ai_question", "")
-    prompt = f"""Ты — персональный трекер-ассистент. Пользователь {name}.
-
-Вот свежие данные пользователя:
-{full_context}
-
-Вопрос: {question}
-Ответь кратко, конкретно, с эмодзи, обращайся по имени."""
-    try:
-        answer = await run_in_thread(gemini_generate, prompt, 8192)
-    except:
-        answer = "❌ Ошибка ИИ."
-    if answer.startswith("❌"):
+    prompt = check_question_prompt(name, full_context, question)
+    header = "<b>Check:</b>"
+    answer = await _stream_ai_reply(bot, chat_id, msg_id, prompt, header)
+    if not answer:
         await callback.message.edit_text(
             f"❌ ИИ не ответил. Попробуй ещё раз.",
             reply_markup=retry_ai_keyboard("ai_question")
         )
         return
-    await callback.message.edit_text(
-        f"<b>Check:</b>\n\n{answer}",
-        parse_mode="HTML", reply_markup=ai_reply_keyboard()
-    )
+    await _show_ai_answer(bot, chat_id, msg_id, header, answer)
     await run_db(save_last_ai_answer, user_id, answer)
 
 
@@ -479,43 +528,15 @@ async def handle_ai_advice(callback: CallbackQuery, bot: Bot, state: FSMContext)
     await bot.send_chat_action(callback.message.chat.id, action=ChatAction.TYPING)
     name = await run_db(get_user_name, user_id, callback.from_user.first_name)
     full_context = await run_db(get_full_context_for_ai, user_id)
-    prompt = f"""Ты — персональный трекер-ассистент. Пользователь {name}.
-
-Вот свежие данные пользователя:
-{full_context}
-
-Дай короткий персональный совет (3-5 предложений): что идёт хорошо, на что обратить внимание, и один конкретный шаг на сегодня/завтра.
-Обращайся по имени, используй эмодзи, пиши по-русски."""
+    prompt = check_advice_prompt(name, full_context)
     await state.update_data(retry_ai_prompt=prompt, retry_action="ai_advice")
-    # Animation while generating
-    phrases_ai = ["Думаю.", "Думаю..", "Думаю...", "Анализирую.", "Анализирую..", "Анализирую..."]
-    stop_ai = asyncio.Event()
     tmp = await callback.message.answer("Думаю...")
     ai_msg_id = tmp.message_id
     temps['ai_advisor'] = ai_msg_id
     user_temp_messages[user_id] = temps
-
-    async def animate_ai():
-        i = 0
-        while not stop_ai.is_set():
-            try:
-                await bot.edit_message_text(phrases_ai[i % len(phrases_ai)],
-                                             callback.message.chat.id, ai_msg_id)
-            except:
-                pass
-            await asyncio.sleep(1)
-            i += 1
-    anim = asyncio.create_task(animate_ai())
-    try:
-        answer = await run_in_thread(gemini_generate, prompt, 8192)
-    finally:
-        stop_ai.set()
-        anim.cancel()
-        try:
-            await anim
-        except asyncio.CancelledError:
-            pass
-    if answer.startswith("❌"):
+    header = "💡 <b>Совет:</b>"
+    answer = await _stream_ai_reply(bot, callback.message.chat.id, ai_msg_id, prompt, header)
+    if not answer:
         try:
             await bot.edit_message_text("❌ ИИ не ответил.", callback.message.chat.id, ai_msg_id)
         except:
@@ -526,17 +547,7 @@ async def handle_ai_advice(callback: CallbackQuery, bot: Bot, state: FSMContext)
         )
         await state.set_state(AIAdvisorState.waiting_for_question)
         return
-    try:
-        await bot.edit_message_text(
-            f"💡 <b>Совет:</b>\n\n{answer}",
-            callback.message.chat.id, ai_msg_id,
-            parse_mode="HTML", reply_markup=ai_reply_keyboard()
-        )
-    except Exception:
-        await delete_message_safe(bot, callback.message.chat.id, ai_msg_id)
-        msg = await callback.message.answer(f"💡 <b>Совет:</b>\n\n{answer}",
-                                            parse_mode="HTML", reply_markup=ai_reply_keyboard())
-        ai_msg_id = msg.message_id
+    ai_msg_id = await _show_ai_answer(bot, callback.message.chat.id, ai_msg_id, header, answer)
     temps['ai_response'] = ai_msg_id
     user_temp_messages[user_id] = temps
     await run_db(save_last_ai_answer, user_id, answer)
@@ -558,43 +569,14 @@ async def process_ai_question(message: Message, bot: Bot, state: FSMContext):
     name = await run_db(get_user_name, user_id, message.from_user.first_name)
     full_context = await run_db(get_full_context_for_ai, user_id)
     await state.update_data(retry_ai_question=question, retry_action="ai_question")
-    context = f"""Ты — персональный трекер-ассистент. Пользователь {name}.
-
-Вот свежие данные пользователя:
-{full_context}
-
-Вопрос: {question}
-Ответь кратко, конкретно, с эмодзи, обращайся по имени."""
-    # Animation while generating
-    phrases_ai = ["Думаю.", "Думаю..", "Думаю...", "Анализирую.", "Анализирую..", "Анализирую..."]
-    stop_ai = asyncio.Event()
-    # Отправляем сообщение для анимации
+    context = check_question_prompt(name, full_context, question)
     tmp = await message.answer("Думаю...")
     ai_msg_id = tmp.message_id
     temps['ai_advisor'] = ai_msg_id
     user_temp_messages[user_id] = temps
-
-    async def animate_ai():
-        i = 0
-        while not stop_ai.is_set():
-            try:
-                await bot.edit_message_text(phrases_ai[i % len(phrases_ai)],
-                                             message.chat.id, ai_msg_id)
-            except:
-                pass
-            await asyncio.sleep(1)
-            i += 1
-    anim = asyncio.create_task(animate_ai())
-    try:
-        answer = await run_in_thread(gemini_generate, context, 8192)
-    finally:
-        stop_ai.set()
-        anim.cancel()
-        try:
-            await anim
-        except asyncio.CancelledError:
-            pass
-    if answer.startswith("❌"):
+    header = "<b>Check:</b>"
+    answer = await _stream_ai_reply(bot, message.chat.id, ai_msg_id, context, header)
+    if not answer:
         try:
             await bot.edit_message_text("❌ ИИ не ответил.", message.chat.id, ai_msg_id)
         except:
@@ -605,19 +587,8 @@ async def process_ai_question(message: Message, bot: Bot, state: FSMContext):
         )
         await state.set_state(AIAdvisorState.waiting_for_question)
         return
-    # Ответ ИИ с reply кнопкой - редактируем то же сообщение (не отправляем новое)
-    try:
-        await bot.edit_message_text(
-            f"<b>Check:</b>\n\n{answer}",
-            message.chat.id, ai_msg_id,
-            parse_mode="HTML", reply_markup=ai_reply_keyboard()
-        )
-    except Exception as e:
-        # Если редактирование не удалось - удаляем старое и отправляем новое
-        await delete_message_safe(bot, message.chat.id, ai_msg_id)
-        msg = await message.answer(f"<b>Check:</b>\n\n{answer}",
-                                    parse_mode="HTML", reply_markup=ai_reply_keyboard())
-        ai_msg_id = msg.message_id
+    # Ответ ИИ с reply кнопкой - то же сообщение, в которое он дописывался
+    ai_msg_id = await _show_ai_answer(bot, message.chat.id, ai_msg_id, header, answer)
     temps['ai_response'] = ai_msg_id
     user_temp_messages[user_id] = temps
     await run_db(save_last_ai_answer, user_id, answer)

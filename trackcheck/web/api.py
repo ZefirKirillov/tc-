@@ -546,12 +546,56 @@ async def api_workout_history(request: web.Request):
     return web.json_response({"ok": True, "data": data})
 
 
+async def _stream_ai(request: web.Request, user_id: int, prompt: str) -> web.StreamResponse:
+    """Ответ ИИ по мере генерации, NDJSON — одна JSON-строка на событие:
+    {"d": "..."} дописать к тексту, {"t": "..."} заменить текст целиком
+    (strip_markdown иногда меняет уже показанное), затем
+    {"done": true, "answer": "..."} или {"error": "ai_failed", "message": "..."}."""
+    import json
+    from trackcheck.database.repositories import save_last_ai_answer
+    from trackcheck.services.ai_service import stream_answer, _friendly_ai_error
+    resp = web.StreamResponse(headers={
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",  # не копить ответ в прокси
+    })
+    await resp.prepare(request)
+
+    async def send(event: dict):
+        await resp.write((json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8"))
+
+    shown, answer = "", ""
+    try:
+        async for text, done in stream_answer(prompt, 8192, interval=0.05):
+            if done:
+                answer = text
+                break
+            if text.startswith(shown):
+                if len(text) > len(shown):
+                    await send({"d": text[len(shown):]})
+            else:
+                await send({"t": text})
+            shown = text
+        if answer:
+            await send({"done": True, "answer": answer})
+            await run_db(save_last_ai_answer, user_id, answer)
+        else:
+            await send({"error": "ai_failed", "message": _friendly_ai_error()})
+    except (ConnectionResetError, ConnectionError):
+        # Mini App закрыли посреди ответа — дописывать некому.
+        print(f"[AI-STREAM] клиент отключился (user={user_id})")
+        return resp
+    await resp.write_eof()
+    return resp
+
 @require_user
 async def api_ai_ask(request: web.Request):
     """Free-form Check question (slow: Gemini call in thread)."""
     from trackcheck.utils.concurrency import run_in_thread
     from trackcheck.database.repositories import get_user_name, save_last_ai_answer
-    from trackcheck.services.ai_service import gemini_generate, get_full_context_for_ai
+    from trackcheck.services.ai_service import (
+        gemini_generate, get_full_context_for_ai, check_question_prompt, check_advice_prompt,
+    )
     user_id = request["tg_user"]["id"]
     try:
         body = await request.json()
@@ -566,11 +610,11 @@ async def api_ai_ask(request: web.Request):
     def _context():
         name = get_user_name(user_id, first or "друг")
         ctx = get_full_context_for_ai(user_id)
-        return (f"Ты — персональный трекер-ассистент. Пользователь {name}.\n\n"
-                f"Вот свежие данные пользователя:\n{ctx}\n\n"
-                f"Вопрос: {question}\nОтветь кратко, конкретно, с эмодзи, обращайся по имени.")
+        return check_question_prompt(name, ctx, question)
 
     prompt = await run_db(_context)
+    if request.query.get("stream"):
+        return await _stream_ai(request, user_id, prompt)
     answer = await run_in_thread(gemini_generate, prompt, 8192)
     if answer.startswith("❌"):
         return web.json_response({"ok": False, "error": "ai_failed"}, status=502)
@@ -583,7 +627,9 @@ async def api_ai_advice(request: web.Request):
     """One-tap personal advice (slow: Gemini call in thread)."""
     from trackcheck.utils.concurrency import run_in_thread
     from trackcheck.database.repositories import get_user_name, save_last_ai_answer
-    from trackcheck.services.ai_service import gemini_generate, get_full_context_for_ai
+    from trackcheck.services.ai_service import (
+        gemini_generate, get_full_context_for_ai, check_question_prompt, check_advice_prompt,
+    )
     user_id = request["tg_user"]["id"]
     tg = request["tg_user"]
     first = tg.get("first_name", "") or ""
@@ -591,13 +637,11 @@ async def api_ai_advice(request: web.Request):
     def _context():
         name = get_user_name(user_id, first or "друг")
         ctx = get_full_context_for_ai(user_id)
-        return (f"Ты — персональный трекер-ассистент. Пользователь {name}.\n\n"
-                f"Вот свежие данные пользователя:\n{ctx}\n\n"
-                "Дай короткий персональный совет (3-5 предложений): что идёт хорошо, "
-                "на что обратить внимание, и один конкретный шаг на сегодня/завтра. "
-                "Обращайся по имени, используй эмодзи, пиши по-русски.")
+        return check_advice_prompt(name, ctx)
 
     prompt = await run_db(_context)
+    if request.query.get("stream"):
+        return await _stream_ai(request, user_id, prompt)
     answer = await run_in_thread(gemini_generate, prompt, 8192)
     if answer.startswith("❌"):
         return web.json_response({"ok": False, "error": "ai_failed"}, status=502)
