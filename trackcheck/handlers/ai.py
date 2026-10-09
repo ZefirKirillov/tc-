@@ -21,7 +21,7 @@ from trackcheck.services.ai_service import (
     gemini_generate, gemini_generate_rating, gemini_generate_plan,
     gemini_parse_manual_plan, _fallback_parse_plan, gemini_session_feedback,
     gemini_monthly_review, get_full_context_for_ai, analyze_low_rating,
-    analyze_food_photo, analyze_body_photo,
+    analyze_food_photo, analyze_body_photo, estimate_food_calories,
 )
 from trackcheck.services.workout_service import _format_full_plan
 from trackcheck.services.gamification_service import get_rank_name
@@ -238,35 +238,8 @@ async def _retry_food_calories(callback, bot, state):
     data = await state.get_data()
     description = data.get("retry_food_description", "")
     user_id = callback.from_user.id
-    prompt = f"""Ты — точный счётчик калорий. Пользователь описывает что он съел (на русском или английском языке).
-
-Твоя задача: посчитать ОБЩЕЕ количество ккал во всём описанном количестве еды.
-
-ПРАВИЛА:
-- Если указано количество (2 бургера, 3 яйца, 200г) — умножай соответственно
-- Если количество не указано — считай стандартную порцию (тарелка супа ~300мл, второе блюдо ~300-400г, бутерброд ~150г)
-- Учитывай ВСЕ компоненты: хлеб, масло, соусы, напитки, гарнир
-- Не занижай: реальная еда жирнее и калорийнее чем кажется
-- Минимум для полноценного приёма пищи (обед/ужин): 350 ккал
-- Перекус может быть 100-300 ккал
-
-Ориентиры (на порцию):
-гречка с курицей = 450, паста карбонара = 680, бургер = 550, пицца (2 куска) = 600,
-борщ = 300, салат цезарь с курицей = 520, омлет 2 яйца = 200, овсянка на молоке = 280,
-рис с мясом = 500, шаурма = 650, хинкали 5шт = 400, суши-сет 8шт = 480,
-протеиновый коктейль = 150, кофе с молоком = 60, яблоко = 80, банан = 100
-
-Еда: {description}
-
-Ответь СТРОГО одним целым числом — суммарные килокалории. Никаких слов, никаких единиц:"""
     await bot.send_chat_action(callback.message.chat.id, action=ChatAction.TYPING)
-    response = await run_in_thread(gemini_generate, prompt, 100, True)
-    try:
-        numbers = re.findall(r"\b(\d{2,5})\b", response)
-        numbers = [float(n) for n in numbers if 50 <= float(n) <= 9999]
-        calories = numbers[-1] if numbers else None
-    except:
-        calories = None
+    calories = await run_in_thread(estimate_food_calories, description)
     if calories is None or calories <= 0:
         # ИИ снова не смог — оставляем кнопку повтора, не заставляя вводить руками
         await callback.message.edit_text(

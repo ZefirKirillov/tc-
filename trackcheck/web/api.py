@@ -34,6 +34,7 @@ RU_ERRORS = {
     "too_short": "Напиши чуть подробнее (от 3 символов).",
     "no_workout_today": "Сегодня отдых — тренировки нет.",
     "ai_failed": "❌ ИИ не ответил. Попробуй ещё раз.",
+    "no_estimate": "Не получилось оценить калории — уточни описание или введи вручную.",
     "photo_too_big": "Фото слишком большое (макс 5 МБ).",
     "photo_bad": "Не получилось прочитать фото.",
     "bad_weight": "Вес: число от 20 до 400 кг.",
@@ -775,6 +776,27 @@ async def api_diet_photo(request: web.Request):
         "description": description, "calories": int(calories), "needs_manual": False}})
 
 
+
+@require_user
+async def api_diet_estimate(request: web.Request):
+    """Estimate calories from a short text description → {calories}. Does NOT log."""
+    from trackcheck.utils.concurrency import run_in_thread
+    from trackcheck.services.ai_service import estimate_food_calories
+    from trackcheck.database.repositories import get_diet_profile
+    if not await run_db(get_diet_profile, request["tg_user"]["id"]):
+        return _err("no_diet_profile")
+    try:
+        body = await request.json()
+    except Exception:
+        return _err("bad_json")
+    description = (body.get("description") or "").strip()[:300]
+    if len(description) < 3:
+        return _err("too_short")
+    calories = await run_in_thread(estimate_food_calories, description)
+    if calories is None or not (0 < calories <= 5000):
+        return _err("no_estimate", 502)
+    return web.json_response({"ok": True, "data": {"calories": int(round(calories))}})
+
 @require_user
 async def api_workout_parse_plan(request: web.Request):
     """Parse user-pasted plan text via Gemini → plan JSON for review (no save)."""
@@ -990,6 +1012,7 @@ def create_api_app() -> web.Application:
     app.router.add_get("/api/diet", api_diet_get)
     app.router.add_post("/api/diet/log", api_diet_log_post)
     app.router.add_post("/api/diet/photo", api_diet_photo)
+    app.router.add_post("/api/diet/estimate", api_diet_estimate)
     app.router.add_post("/api/diet/profile", api_diet_profile_post)
     app.router.add_get("/api/body", api_body_get)
     app.router.add_post("/api/body", api_body_post)

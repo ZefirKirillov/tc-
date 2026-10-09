@@ -25,6 +25,17 @@ from trackcheck.database.repositories import (
 from trackcheck.utils.formatting import strip_markdown, workouts_progress
 
 
+# Atria Dawn (Shanghai AI Lab) — первичный провайдер для текста.
+# Модель текстовая: запросы с картинками идут сразу в Nara/Google.
+ATRIA_BASE_URL = os.environ.get("ATRIA_BASE_URL", "https://api.atria-asi.ai/v1").rstrip("/")
+ATRIA_MODEL = os.environ.get("ATRIA_MODEL", "Atria-Dawn-Preview")
+# low — быстрее ответ; medium/high — дольше думает. Пусто — не передавать параметр.
+ATRIA_REASONING_EFFORT = os.environ.get("ATRIA_REASONING_EFFORT", "low").strip()
+# Рассуждения модели тратят тот же лимит токенов, поэтому короткие запросы
+# (ккал одним числом, max_tokens=100) иначе обрезаются до пустого ответа.
+ATRIA_MIN_TOKENS = int(os.environ.get("ATRIA_MIN_TOKENS", "2048"))
+ATRIA_TIMEOUT = float(os.environ.get("ATRIA_TIMEOUT", "180"))
+
 NARA_BASE_URL = os.environ.get("NARA_BASE_URL", "https://router.bynara.id/v1").rstrip("/")
 NARA_MODEL = os.environ.get("NARA_MODEL", "ling-3.0-flash-vl-free")
 GOOGLE_MODEL = os.environ.get("GOOGLE_MODEL", "gemini-3.6-flash")
@@ -54,9 +65,21 @@ def _google_api_key(ratings: bool = False) -> Optional[str]:
     return os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
 
 
+def _atria_api_key(ratings: bool = False) -> Optional[str]:
+    if ratings:
+        return os.environ.get("ATRIA_API_KEY_RATINGS") or os.environ.get("ATRIA_API_KEY")
+    return os.environ.get("ATRIA_API_KEY")
+
+
+def _has_any_key(ratings: bool = False, image: bool = False) -> bool:
+    """Есть ли хоть один провайдер для запроса. Atria не принимает картинки."""
+    return bool((not image and _atria_api_key(ratings))
+                or _nara_api_key(ratings) or _google_api_key(ratings))
+
+
 # Имя последнего сработавшего провайдера/модели — для логов и отладки.
-# Обновляется каждым вызовом _generate_text: {'provider': 'nara'|'google'|None,
-# 'model': ..., 'reason': ...}. reason объясняет, почему Nara не сработала
+# Обновляется каждым вызовом _generate_text: {'provider': 'atria'|'nara'|'google'|None,
+# 'model': ..., 'reason': ...}. reason объясняет, почему Atria/Nara не сработала
 # и произошёл fallback (или почему не сработал никто).
 LAST_AI_CALL: dict = {"provider": None, "model": None, "reason": None}
 
@@ -92,14 +115,15 @@ def _log_ai_call(caller: str, detail: str = "") -> None:
         pass
 
 
-def _nara_chat(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None,
-               api_key: Optional[str] = None) -> Optional[str]:
-    """Прямой вызов NaraRouter через OpenAI-совместимый /chat/completions.
+def _openai_chat(provider: str, base_url: str, model: str, key: Optional[str],
+                 prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None,
+                 extra: Optional[dict] = None, timeout: float = 120) -> Optional[str]:
+    """Вызов OpenAI-совместимого /chat/completions (Atria, NaraRouter).
 
     Возвращает текст ответа или None. Причину неудачи пишет в
     LAST_AI_CALL['reason']: 'no_key' | 'empty' | 'http_<code>: <body>' |
     'exception: <ClassName>: <msg>'."""
-    key = api_key if api_key is not None else _nara_api_key()
+    tag = provider.upper()
     if not key:
         LAST_AI_CALL.update(provider=None, model=None, reason="no_key")
         return None
@@ -118,7 +142,7 @@ def _nara_chat(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None
             content = prompt
         def _post(payload: dict) -> tuple:
             req = urllib.request.Request(
-                f"{NARA_BASE_URL}/chat/completions",
+                f"{base_url}/chat/completions",
                 data=json.dumps(payload).encode("utf-8"),
                 headers={
                     "Content-Type": "application/json",
@@ -126,14 +150,15 @@ def _nara_chat(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None
                 },
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 status = getattr(resp, "status", "?")
                 body = json.loads(resp.read().decode("utf-8"))
             return status, body
 
         base_payload = {
-            "model": NARA_MODEL,
+            "model": model,
             "messages": [{"role": "user", "content": content}],
+            **(extra or {}),
         }
         status, body = None, None
         last_400: Optional[Exception] = None
@@ -152,43 +177,62 @@ def _nara_chat(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None
                 code = getattr(e, "code", None) or getattr(e, "status", None)
                 if code == 400 and token_key == "max_tokens":
                     last_400 = e
-                    print(f"[NARA] 400 с max_tokens — повторяю с "
+                    print(f"[{tag}] 400 с max_tokens — повторяю с "
                           f"max_completion_tokens...")
                     continue
                 raise
         elapsed = time.monotonic() - started
         # Какая модель реально ответила: доверяем полю "model" из ответа
         # роутера (может отличаться от запрошенной при remap на стороне Nara).
-        served_model = body.get("model") or NARA_MODEL
+        served_model = body.get("model") or model
         choices = body.get("choices") or []
         if choices:
             msg = choices[0].get("message") or {}
-            text = (msg.get("content") or "").strip()
+            text = (msg.get("content") or "")
+            # Рассуждающие модели иногда кладут мысли прямо в content.
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
             if text:
-                LAST_AI_CALL.update(provider="nara", model=served_model,
+                LAST_AI_CALL.update(provider=provider, model=served_model,
                                     reason=f"ok http={status} {elapsed:.1f}s "
                                            f"finish={choices[0].get('finish_reason')}")
-                print(f"[NARA] OK model={served_model} http={status} "
+                print(f"[{tag}] OK model={served_model} http={status} "
                       f"{elapsed:.1f}s ({len(text)} chars)")
                 return text
         LAST_AI_CALL.update(provider=None, model=served_model,
-                            reason=f"empty http={status} {elapsed:.1f}s "
+                            reason=f"{provider}: empty http={status} {elapsed:.1f}s "
                                    f"body={repr(str(body)[:200])}")
-        print(f"[NARA] Пустой ответ от роутера (model={served_model}): "
+        print(f"[{tag}] Пустой ответ (model={served_model}): "
               f"{repr(str(body)[:200])}")
         return None
     except Exception as e:
         import traceback
         elapsed = time.monotonic() - started
-        reason = _describe_http_error(e)
-        LAST_AI_CALL.update(provider=None, model=NARA_MODEL,
-                            reason=f"{reason} after={elapsed:.1f}s")
-        print(f"[NARA] Ошибка ({reason}, {elapsed:.1f}s): {e}")
+        reason = _describe_http_error(e, provider, model)
+        LAST_AI_CALL.update(provider=None, model=model,
+                            reason=f"{provider}: {reason} after={elapsed:.1f}s")
+        print(f"[{tag}] Ошибка ({reason}, {elapsed:.1f}s): {e}")
         traceback.print_exc()
         return None
 
 
-def _describe_http_error(e: Exception) -> str:
+def _nara_chat(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None,
+               api_key: Optional[str] = None) -> Optional[str]:
+    key = api_key if api_key is not None else _nara_api_key()
+    return _openai_chat("nara", NARA_BASE_URL, NARA_MODEL, key,
+                        prompt, max_tokens, image_bytes)
+
+
+def _atria_chat(prompt: str, max_tokens: int,
+                api_key: Optional[str] = None) -> Optional[str]:
+    key = api_key if api_key is not None else _atria_api_key()
+    extra = {"reasoning_effort": ATRIA_REASONING_EFFORT} if ATRIA_REASONING_EFFORT else None
+    return _openai_chat("atria", ATRIA_BASE_URL, ATRIA_MODEL, key,
+                        prompt, max(max_tokens, ATRIA_MIN_TOKENS),
+                        extra=extra, timeout=ATRIA_TIMEOUT)
+
+
+def _describe_http_error(e: Exception, provider: str = "nara",
+                         model: str = NARA_MODEL) -> str:
     """Короткое объяснение HTTP-ошибки: статус + тело ответа, если есть."""
     status = getattr(e, "code", None) or getattr(e, "status", None)
     body = ""
@@ -201,11 +245,11 @@ def _describe_http_error(e: Exception) -> str:
     if status:
         hint = ""
         if status == 401:
-            hint = " (неверный/отсутствующий NARA_API?)"
+            hint = f" (неверный/отсутствующий ключ {provider.upper()}?)"
         elif status == 402:
             hint = " (кончились кредиты/квота на роутере?)"
         elif status == 404:
-            hint = f" (модель '{NARA_MODEL}' не найдена на роутере?)"
+            hint = f" (модель '{model}' не найдена у {provider}?)"
         elif status == 429:
             hint = " (rate limit — слишком много запросов?)"
         elif status == 400:
@@ -312,11 +356,18 @@ def _google_generate(prompt: str, max_tokens: int, image_bytes: Optional[bytes] 
 def _generate_text(prompt: str, max_tokens: int = 8192, image_bytes: Optional[bytes] = None,
                    think_off: bool = False, rating_key: bool = False,
                    caller: Optional[str] = None) -> Optional[str]:
-    """NaraRouter — первичный провайдер, Google — fallback.
+    """Atria Dawn — первичный провайдер (только текст), затем NaraRouter,
+    Google — последний fallback.
 
     Каждый вызов пишет одну итоговую строку [AI-ROUTE] в лог: кто вызвал,
     какой провайдер/модель реально ответили и почему случился fallback."""
     caller = caller or _auto_caller()
+    if not image_bytes and _atria_api_key(ratings=rating_key):
+        text = _atria_chat(prompt, max_tokens, api_key=_atria_api_key(ratings=rating_key))
+        if text:
+            _log_ai_call(caller)
+            return text
+        print(f"[AI] Atria не ответила ({LAST_AI_CALL.get('reason')}) — пробую NaraRouter.")
     text = _nara_chat(prompt, max_tokens, image_bytes,
                       api_key=_nara_api_key(ratings=rating_key))
     if text:
@@ -343,22 +394,22 @@ def _friendly_ai_error() -> str:
     if "429" in reason or "rate limit" in reason or "resource_exhausted" in reason:
         return "❌ Слишком много запросов к ИИ. Подожди минуту и попробуй снова."
     if "401" in reason:
-        return "❌ ИИ недоступен (неверный API-ключ). Проверь NARA_API."
+        return "❌ ИИ недоступен (неверный API-ключ). Проверь ATRIA_API_KEY / NARA_API."
     if "402" in reason:
         return "❌ Закончились кредиты на ИИ-роутере. Пополни баланс Nara."
     if "400" in reason:
         return (f"❌ ИИ-роутер отклонил запрос (модель {model}). "
                 "Попробуй ещё раз или позже.")
     if "no_key" in reason or "google_no_key" in reason:
-        return "❌ ИИ недоступен (нет API-ключа). Установи NARA_API."
+        return "❌ ИИ недоступен (нет API-ключа). Установи ATRIA_API_KEY или NARA_API."
     return "❌ ИИ не вернул ответ (возможно, сработала фильтрация). Попробуй ещё раз."
 
 
 def gemini_generate(prompt: str, max_tokens: int = 8192, raw: bool = False) -> str:
-    """Синхронный вызов ИИ (NaraRouter — первично, Google — fallback).
+    """Синхронный вызов ИИ (Atria → NaraRouter → Google).
     raw=True — не применять strip_markdown (для JSON-ответов)."""
-    if not _nara_api_key() and not _google_api_key():
-        return "❌ ИИ недоступен (нет API-ключа). Установи NARA_API."
+    if not _has_any_key():
+        return "❌ ИИ недоступен (нет API-ключа). Установи ATRIA_API_KEY или NARA_API."
     text = _generate_text(prompt, max_tokens)
     if not text:
         return _friendly_ai_error()
@@ -371,7 +422,7 @@ def gemini_generate(prompt: str, max_tokens: int = 8192, raw: bool = False) -> s
 
 def gemini_generate_json(prompt: str, max_tokens: int = 8192) -> str:
     """Вызов ИИ для JSON-ответов."""
-    if not _nara_api_key() and not _google_api_key():
+    if not _has_any_key():
         return ""
     text = _generate_text(prompt, max_tokens, think_off=True)
     if text:
@@ -387,7 +438,7 @@ def gemini_generate_rating(prompt: str, max_tokens: int = 1024) -> Optional[dict
     {"rating": 1-10, "comment"/"response": "..."}. Возвращает None если
     ключ не настроен или запрос не удался — вызывающий код должен в этом случае
     откатиться на ручной ввод оценки, а не выдумывать число."""
-    if not _nara_api_key(ratings=True) and not _google_api_key(ratings=True):
+    if not _has_any_key(ratings=True):
         return None
     text = _generate_text(prompt, max_tokens, think_off=True, rating_key=True)
     if not text:
@@ -411,6 +462,43 @@ def gemini_generate_rating(prompt: str, max_tokens: int = 1024) -> Optional[dict
 
 
 
+def food_calories_prompt(description: str) -> str:
+    return f"""Ты — точный счётчик калорий. Пользователь описывает что он съел (на русском или английском языке).
+
+Твоя задача: посчитать ОБЩЕЕ количество ккал во всём описанном количестве еды.
+
+ПРАВИЛА:
+- Если указано количество (2 бургера, 3 яйца, 200г) — умножай соответственно
+- Если количество не указано — считай стандартную порцию (тарелка супа ~300мл, второе блюдо ~300-400г, бутерброд ~150г)
+- Учитывай ВСЕ компоненты: хлеб, масло, соусы, напитки, гарнир
+- Не занижай: реальная еда жирнее и калорийнее чем кажется
+- Минимум для полноценного приёма пищи (обед/ужин): 350 ккал
+- Перекус может быть 100-300 ккал
+
+Ориентиры (на порцию):
+гречка с курицей = 450, паста карбонара = 680, бургер = 550, пицца (2 куска) = 600,
+борщ = 300, салат цезарь с курицей = 520, омлет 2 яйца = 200, овсянка на молоке = 280,
+рис с мясом = 500, шаурма = 650, хинкали 5шт = 400, суши-сет 8шт = 480,
+протеиновый коктейль = 150, кофе с молоком = 60, яблоко = 80, банан = 100
+
+Еда: {description}
+
+Ответь СТРОГО одним целым числом — суммарные килокалории. Никаких слов, никаких единиц:"""
+
+
+def estimate_food_calories(description: str) -> Optional[float]:
+    """Оценка ккал по текстовому описанию еды. None — ИИ не ответил или
+    ответ не похож на число ккал (вызывающий код предлагает повтор/ручной ввод)."""
+    if not _has_any_key():
+        return None
+    text = _generate_text(food_calories_prompt(description), 100, think_off=True)
+    if not text:
+        return None
+    numbers = [float(n) for n in re.findall(r"\b(\d{2,5})\b", text)
+               if 50 <= float(n) <= 9999]
+    return numbers[-1] if numbers else None
+
+
 def analyze_food_photo(image_bytes: bytes, prompt: str) -> Optional[str]:
     """Распознавание блюда/калорий по фото. Возвращает None при ошибке,
     чтобы вызывающий код мог показать кнопку повтора."""
@@ -428,7 +516,7 @@ def analyze_food_photo(image_bytes: bytes, prompt: str) -> Optional[str]:
 
 
 def analyze_body_photo(image_bytes: bytes, prompt: str, max_tokens: int = 2048) -> Optional[str]:
-    """Анализ фото телосложения (NaraRouter первично, Google fallback)."""
+    """Анализ фото телосложения (NaraRouter первично, Google fallback; Atria не видит фото)."""
     if not image_bytes:
         return None
     if not _nara_api_key() and not _google_api_key():

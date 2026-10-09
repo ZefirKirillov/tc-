@@ -118,5 +118,42 @@ class TestWorkoutScore(unittest.TestCase):
         self.assertAlmostEqual(exercise_score(self.SQUAT, log), (1 + 1 + 0.75) / 3)
 
 
+class RestDayTest(unittest.TestCase):
+    """«активность» = 5 on a rest day from the start of the day (DB helpers stubbed)."""
+
+    def setUp(self):
+        from unittest import mock
+        import trackcheck.services.tracker_service as ts
+        self.ts, self.saved = ts, []
+        self.ratings, self.plan, self.today, self.session = {}, {"plan": {}}, None, None
+        for name, fn in {
+            "get_today_ratings": lambda uid: self.ratings,
+            "get_ai_plan": lambda uid: self.plan,
+            "get_today_plan": lambda plan, uid: self.today,
+            "get_today_session": lambda uid: self.session,
+            "_save_auto": lambda uid, cat, score: self.saved.append((cat, score)),
+        }.items():
+            p = mock.patch.object(ts, name, fn)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_rest_day_scored_immediately(self):
+        self.ts.ensure_rest_day_rating(1)
+        self.assertEqual(self.saved, [("активность", 5)])
+        self.assertEqual(self.ts.compute_activity_rating(1, final=False), 5)
+
+    def test_not_on_training_day_or_without_plan(self):
+        self.today = [{"exercise": "Жим"}]
+        self.ts.ensure_rest_day_rating(1)
+        self.today, self.plan = None, None
+        self.ts.ensure_rest_day_rating(1)
+        self.assertEqual(self.saved, [])
+
+    def test_existing_rating_kept(self):
+        self.ratings = {"активность": 8}
+        self.ts.ensure_rest_day_rating(1)
+        self.assertEqual(self.saved, [])
+
+
 if __name__ == "__main__":
     unittest.main()

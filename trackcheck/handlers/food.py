@@ -19,7 +19,7 @@ from trackcheck.database.repositories import (
     calculate_bmr, calculate_tdee, calculate_daily_calories,
 )
 from trackcheck.states.food import DietState
-from trackcheck.services.ai_service import gemini_generate, analyze_food_photo
+from trackcheck.services.ai_service import analyze_food_photo, estimate_food_calories
 from trackcheck.services.tracker_service import sync_diet_rating_for_today
 from trackcheck.services.chart_service import build_diet_chart
 from trackcheck.utils.concurrency import run_in_thread
@@ -344,35 +344,8 @@ async def process_food_description(message: Message, bot: Bot, state: FSMContext
         del temps['diet_error']
 
     await bot.send_chat_action(message.chat.id, action=ChatAction.TYPING)
-    prompt = f"""Ты — точный счётчик калорий. Пользователь описывает что он съел (на русском или английском языке).
-
-Твоя задача: посчитать ОБЩЕЕ количество ккал во всём описанном количестве еды.
-
-ПРАВИЛА:
-- Если указано количество (2 бургера, 3 яйца, 200г) — умножай соответственно
-- Если количество не указано — считай стандартную порцию (тарелка супа ~300мл, второе блюдо ~300-400г, бутерброд ~150г)
-- Учитывай ВСЕ компоненты: хлеб, масло, соусы, напитки, гарнир
-- Не занижай: реальная еда жирнее и калорийнее чем кажется
-- Минимум для полноценного приёма пищи (обед/ужин): 350 ккал
-- Перекус может быть 100-300 ккал
-
-Ориентиры (на порцию):
-гречка с курицей = 450, паста карбонара = 680, бургер = 550, пицца (2 куска) = 600,
-борщ = 300, салат цезарь с курицей = 520, омлет 2 яйца = 200, овсянка на молоке = 280,
-рис с мясом = 500, шаурма = 650, хинкали 5шт = 400, суши-сет 8шт = 480,
-протеиновый коктейль = 150, кофе с молоком = 60, яблоко = 80, банан = 100
-
-Еда: {description}
-
-Ответь СТРОГО одним целым числом — суммарные килокалории. Никаких слов, никаких единиц:"""
     await state.update_data(retry_food_description=description, retry_action="food_calories")
-    response = await run_in_thread(gemini_generate, prompt, 100, True)
-    try:
-        numbers = re.findall(r"\b(\d{2,5})\b", response)
-        numbers = [float(n) for n in numbers if 50 <= float(n) <= 9999]
-        calories = numbers[-1] if numbers else None
-    except:
-        calories = None
+    calories = await run_in_thread(estimate_food_calories, description)
 
     if calories is None or calories <= 0:
         await state.update_data(food_description=description)

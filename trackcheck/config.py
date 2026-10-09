@@ -39,6 +39,10 @@ def miniapp_url(tab: str = "") -> str:
 
 
 
+ATRIA_API_KEY = os.getenv("ATRIA_API_KEY")
+ATRIA_BASE_URL = os.getenv("ATRIA_BASE_URL", "https://api.atria-asi.ai/v1")
+ATRIA_MODEL = os.getenv("ATRIA_MODEL", "Atria-Dawn-Preview")
+
 NARA_API_KEY = os.getenv("NARA_API") or os.getenv("NARA_API_KEY")
 NARA_BASE_URL = os.getenv("NARA_BASE_URL", "https://router.bynara.id/v1")
 NARA_MODEL = os.getenv("NARA_MODEL", "ling-3.0-flash-vl-free")

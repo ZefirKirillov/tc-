@@ -1,0 +1,47 @@
+# Secrets and environment variables
+.env
+.env.*
+*.env
+secrets.py
+config_local.py
+token.txt
+tokens.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Databases and user data
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs and runtime files
+*.log
+logs/
+*.pid
+
+# Generated files
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.pdf
+exports/
+charts/
+temp/
+tmp/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Mini App
+node_modules/
+miniapp/dist/

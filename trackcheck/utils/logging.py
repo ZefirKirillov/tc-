@@ -47,20 +47,27 @@ def log_ratings_ai_diagnostics():
     поэтому по симптомам ('значения не обновляются', 'настрой всегда просит оценить вручную')
     это выглядит как баг, хотя на самом деле просто не задана переменная окружения."""
     key_present = bool(
-        os.environ.get("NARA_API") or os.environ.get("NARA_API_KEY")
+        os.environ.get("ATRIA_API_KEY") or os.environ.get("ATRIA_API_KEY_RATINGS")
+        or os.environ.get("NARA_API") or os.environ.get("NARA_API_KEY")
         or os.environ.get("NARA_API_RATINGS") or os.environ.get("NARA_API_KEY_RATINGS")
         or os.environ.get("GOOGLE_API_KEY_RATINGS") or os.environ.get("GEMINI_API_KEY_RATINGS")
     )
     print(f"[RATINGS-AI] Ratings AI key настроен: {key_present} "
-          f"(Nara: {bool(os.environ.get('NARA_API') or os.environ.get('NARA_API_KEY'))})")
+          f"(Atria: {bool(os.environ.get('ATRIA_API_KEY'))}, "
+          f"Nara: {bool(os.environ.get('NARA_API') or os.environ.get('NARA_API_KEY'))})")
     if not key_present:
         print("[RATINGS-AI] ⚠️ Ключ не задан - авто-оценка 'еда'/'активность' и AI-оценка 'настроя' "
               "не будут работать (тихо ничего не делают), 'настрой' всегда будет уходить в ручной ввод. "
-              "Задайте переменную окружения NARA_API (тот же ключ покрывает и рейтинги), "
+              "Задайте переменную окружения ATRIA_API_KEY или NARA_API (тот же ключ покрывает и рейтинги), "
               "либо NARA_API_RATINGS / GOOGLE_API_KEY_RATINGS для отдельного ключа.")
     else:
+        if os.environ.get("ATRIA_API_KEY"):
+            print(f"[AI] Atria: base={os.environ.get('ATRIA_BASE_URL', 'https://api.atria-asi.ai/v1')}, "
+                  f"model={os.environ.get('ATRIA_MODEL', 'Atria-Dawn-Preview')}, "
+                  f"reasoning_effort={os.environ.get('ATRIA_REASONING_EFFORT', 'low') or '-'}")
         print(f"[AI] NaraRouter: base={os.environ.get('NARA_BASE_URL', 'https://router.bynara.id/v1')}, "
               f"model={os.environ.get('NARA_MODEL', 'ling-3.0-flash-vl-free')}")
         print("[AI] Каждый ИИ-вызов логируется строкой [AI-ROUTE] "
-              "(caller/provider/model/reason); детали — в строках [NARA]/[GEMINI].")
-        print("[AI] Fallback-цепочка: NaraRouter → Google (GOOGLE_API_KEY, если задан).")
+              "(caller/provider/model/reason); детали — в строках [ATRIA]/[NARA]/[GEMINI].")
+        print("[AI] Fallback-цепочка: Atria (только текст, если задан ATRIA_API_KEY) → "
+              "NaraRouter → Google (GOOGLE_API_KEY, если задан).")

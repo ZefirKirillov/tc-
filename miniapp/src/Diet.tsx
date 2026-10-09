@@ -24,6 +24,7 @@ export default function Diet() {
   const [meal, setMeal] = useState('Еда')
   const [busy, setBusy] = useState(false)
   const [photoBusy, setPhotoBusy] = useState(false)
+  const [estBusy, setEstBusy] = useState(false)
   const [photoPrev, setPhotoPrev] = useState<{ url: string; description: string; calories: number | null } | null>(null)
   const [manualCal, setManualCal] = useState('')
   const [body, setBody] = useState<any>(() => peek('body') ?? null)
@@ -60,6 +61,18 @@ export default function Diet() {
       await load()
       pulseOk(FOOD_PULSE)
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
+  }
+
+  // AI fills the calorie field from the description; the user can still edit it.
+  async function estimate() {
+    if (desc.trim().length < 3) { b.setErr('Опиши блюдо чуть подробнее.'); return }
+    setEstBusy(true)
+    b.clear()
+    try {
+      const r = await api.dietEstimate(desc.trim())
+      setCal(String(r.calories))
+      haptic()
+    } catch (e) { b.setErr(e) } finally { setEstBusy(false) }
   }
 
   async function onPhoto(file: File | undefined) {
@@ -198,6 +211,9 @@ export default function Diet() {
             <>
               <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Что съел? Например, овсянка 100 г"
                 className="field mt" maxLength={300} />
+              <button onClick={estimate} disabled={estBusy || desc.trim().length < 3} className="btn btn-ghost mt" style={{ minHeight: 44, width: '100%' }}>
+                {estBusy ? <><Spinner fallback={<Ico.spark size={18} />} /> Считаю калории…</> : <><Ico.spark size={18} /> Посчитать калории ИИ</>}
+              </button>
               <div className="field-row mt">
                 <input value={cal} onChange={(e) => setCal(e.target.value)} placeholder="Ккал" inputMode="decimal"
                   className="field field-num" style={{ flex: '0 1 120px' }} maxLength={7}

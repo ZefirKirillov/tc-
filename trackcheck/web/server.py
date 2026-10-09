@@ -9,7 +9,7 @@ from trackcheck.health import HOST, DEFAULT_PORT, healthz, index
 from trackcheck.web.api import (
     api_me, api_ratings_get, api_ratings_post,
     api_tasks_get, api_tasks_post, api_task_done, api_task_delete,
-    api_diet_get, api_diet_log_post, api_diet_photo, api_diet_profile_post,
+    api_diet_get, api_diet_log_post, api_diet_photo, api_diet_estimate, api_diet_profile_post,
     api_body_get, api_body_post, api_stats_get,
     api_workout_get, api_workout_start, api_workout_log_ex,
     api_workout_log_text, api_workout_finish, api_workout_generate,
@@ -70,6 +70,7 @@ def create_web_app() -> web.Application:
     app.router.add_get("/api/diet", api_diet_get)
     app.router.add_post("/api/diet/log", api_diet_log_post)
     app.router.add_post("/api/diet/photo", api_diet_photo)
+    app.router.add_post("/api/diet/estimate", api_diet_estimate)
     app.router.add_post("/api/diet/profile", api_diet_profile_post)
     app.router.add_get("/api/body", api_body_get)
     app.router.add_post("/api/body", api_body_post)
