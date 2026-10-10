@@ -12,26 +12,30 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 from PIL import Image
 
-from trackcheck.config import WEEKDAY_KEY, WEEKDAY_RU
+from trackcheck.config import WEEKDAY_KEY, WEEKDAY_RU, WEEKDAY_FROM_KEY
 from trackcheck.database.connection import db
 from trackcheck.database.repositories import (
     get_ai_plan, save_ai_plan, delete_all_workout_data, get_today_session,
     create_today_session, get_session_exercise_logs, get_previous_same_session,
     get_next_training_day, get_weekly_workout_progress,
-    get_current_week_session_key, get_today_plan, update_plan_json,
-    update_session_exercise_plan, set_workout_goal, add_workout, add_spark,
+    get_today_plan, update_plan_json,
+    set_workout_goal, add_workout, add_spark,
     update_streak, get_user_name, _is_unique_violation,
-    _deduct_spark_for_skip,
+    _deduct_spark_for_skip, delete_session, get_exercise_substitution,
 )
 from trackcheck.states.workout import WorkoutState, AIPlanState, WorkoutSessionState
 from trackcheck.services.ai_service import (
     gemini_generate_plan, gemini_parse_manual_plan, _fallback_parse_plan,
-    gemini_edit_plan, gemini_parse_exercise_result, gemini_session_feedback,
-    gemini_adapt_next_session, gemini_monthly_review, analyze_body_photo,
+    gemini_edit_plan, gemini_parse_exercise_result, gemini_parse_free_workout,
+    gemini_monthly_review, analyze_body_photo,
 )
 from trackcheck.services.tracker_service import sync_activity_rating_for_today
 from trackcheck.services.workout_service import (
     _format_full_plan, _format_session_detail, apply_monthly_changes,
+    format_weight, exercise_name, log_exercise, count_workout,
+    plan_raise_target, apply_weight_raise, substitution_suggestions,
+    log_substitution_repeat, log_substitution_items, plan_day_options,
+    start_plan_day, save_free_workout,
 )
 from trackcheck.services.gamification_service import get_rank_name
 from trackcheck.services.chart_service import build_workout_progress_chart
@@ -56,7 +60,9 @@ from trackcheck.keyboards.workouts import (
     wp_mode_keyboard, wp_goal_keyboard, wp_level_keyboard, wp_days_keyboard,
     wp_plan_review_keyboard, wp_plan_review_keyboard_manual,
     ws_today_keyboard, ws_exercise_keyboard, ws_skip_day_keyboard,
-    ws_rest_day_keyboard, wp_settings_keyboard,
+    ws_rest_day_keyboard, wp_settings_keyboard, ws_rest_day_actions_keyboard,
+    ws_pick_day_keyboard, ws_free_log_keyboard, ws_replace_keyboard,
+    ws_raise_weight_keyboard,
 )
 from trackcheck.runtime import (user_temp_messages, user_last_menu,
                                 user_history_page, user_nav, nav_push)
@@ -706,31 +712,34 @@ async def _show_ai_workout_today_inner(user_id: int, chat_id: int, bot: Bot, sta
     if not plan_data:
         return
     nav_push(user_id, "workout_today")
-
-    today_exercises = get_today_plan(plan_data, user_id)
     temps = user_temp_messages.get(user_id, {})
 
-    if not today_exercises:
-        # День отдыха
-        # Удаляем предыдущее сообщение workout_menu
-        await delete_message_safe(bot, chat_id, temps.get('workout_menu'))
-        
-        next_date, next_day = get_next_training_day(plan_data, user_id)
-        text = "Сегодня день отдыха."
-        if next_date and next_day:
-            text += f"\nСледующая тренировка: {next_day}, {next_date}"
-        msg = await bot.send_message(chat_id, text, reply_markup=ws_rest_day_keyboard())
-        temps['workout_menu'] = msg.message_id
-        user_temp_messages[user_id] = temps
-        return
+    # Сессия на сегодня может быть и в день отдыха (день из плана / запись текстом)
+    session = get_today_session(user_id)
+    if not session:
+        if not get_today_plan(plan_data, user_id):
+            # День отдыха
+            # Удаляем предыдущее сообщение workout_menu
+            await delete_message_safe(bot, chat_id, temps.get('workout_menu'))
 
-    # Создаём сессию если нет
-    session = create_today_session(user_id, plan_data)
-    if session and session["status"] in ("done", "skipped"):
+            next_date, next_day = get_next_training_day(plan_data, user_id)
+            text = "Сегодня день отдыха."
+            if next_date and next_day:
+                text += f"\nСледующая тренировка: {next_day}, {next_date}"
+            text += "\n\nХочешь потренироваться — запиши, что сделал, или возьми день из плана."
+            msg = await bot.send_message(chat_id, text, reply_markup=ws_rest_day_actions_keyboard())
+            temps['workout_menu'] = msg.message_id
+            user_temp_messages[user_id] = temps
+            return
+        session = create_today_session(user_id, plan_data)
+        if not session:
+            raise RuntimeError("today session was not created")
+
+    if session["status"] in ("done", "skipped"):
         # Уже завершили сегодня
         # Удаляем предыдущее сообщение workout_menu
         await delete_message_safe(bot, chat_id, temps.get('workout_menu'))
-        
+
         text = "Сегодняшняя тренировка уже записана."
         next_date, next_day = get_next_training_day(plan_data, user_id)
         if next_date:
@@ -742,17 +751,23 @@ async def _show_ai_workout_today_inner(user_id: int, chat_id: int, bot: Bot, sta
 
     # Получаем историю прошлого раза
     weekday = user_weekday(user_id)
-    today_key = WEEKDAY_KEY[weekday]
-    week_key = get_current_week_session_key(plan_data, plan_data["start_date"], user_id)
-    session_key = f"{week_key}_{today_key}"
+    session_key = session["session_key"]
     today_str = user_today_str(user_id)
     prev_sessions = get_previous_same_session(user_id, session_key, today_str)
+    exercises = session["plan"]
+    if isinstance(exercises, dict):
+        exercises = list(exercises.values())
 
     # Строим текст плана
-    plan_name = f"Тренировка — {WEEKDAY_RU[weekday]}"
+    day_key = session_key.split("_", 2)[-1]
+    extra = day_key != WEEKDAY_KEY[weekday]
+    if extra:
+        plan_name = f"Тренировка — {WEEKDAY_RU.get(WEEKDAY_FROM_KEY.get(day_key), day_key)} (доп.)"
+    else:
+        plan_name = f"Тренировка — {WEEKDAY_RU[weekday]}"
     date_str = user_today_str(user_id, '%d.%m.%Y')
     lines = [f"{plan_name}", f"{date_str}", ""]
-    for i, ex in enumerate(today_exercises, 1):
+    for i, ex in enumerate(exercises, 1):
         name = ex.get("exercise", ex.get("name", "?"))
         sets = ex.get("sets", "?")
         reps = ex.get("reps", "?")
@@ -779,11 +794,158 @@ async def _show_ai_workout_today_inner(user_id: int, chat_id: int, bot: Bot, sta
 
     text = "\n".join(lines)
     await state.set_state(WorkoutSessionState.viewing_plan)
-    await state.update_data(session_id=session["id"] if session else None,
+    await state.update_data(session_id=session["id"],
                             exercise_index=0, prev_sessions=prev_sessions or [])
-    msg = await bot.send_message(chat_id, text, reply_markup=ws_today_keyboard())
+    msg = await bot.send_message(chat_id, text, reply_markup=ws_today_keyboard(extra=extra))
     temps['workout_menu'] = msg.message_id
     user_temp_messages[user_id] = temps
+
+
+
+async def _edit_workout_menu(message, bot: Bot, user_id: int, text: str, markup):
+    """Редактирует сообщение workout_menu, а если не вышло — шлёт новое."""
+    temps = user_temp_messages.setdefault(user_id, {})
+    msg_id = temps.get("workout_menu")
+    if msg_id:
+        try:
+            await bot.edit_message_text(text, message.chat.id, msg_id, reply_markup=markup)
+            return
+        except Exception:
+            pass
+    msg = await message.answer(text, reply_markup=markup)
+    temps["workout_menu"] = msg.message_id
+
+
+
+async def _back_to_today(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    user_id = callback.from_user.id
+    await state.clear()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    user_temp_messages.setdefault(user_id, {}).pop("workout_menu", None)
+    await show_ai_workout_today(user_id, callback.message.chat.id, bot, state)
+    await callback.answer()
+
+
+
+def _format_result(res: dict) -> str:
+    parts = []
+    if res.get("sets_done") or res.get("reps_done"):
+        parts.append(f"{res.get('sets_done') or '?'}×{res.get('reps_done') or '?'}")
+    if res.get("weight_done"):
+        parts.append(f"@ {format_weight(res['weight_done'])}кг")
+    if res.get("note"):
+        parts.append(f"({res['note']})")
+    return " ".join(parts)
+
+
+
+def _count_workout(user_id: int):
+    _, rank_up, new_rank = count_workout(user_id)
+    asyncio.create_task(run_in_thread(sync_activity_rating_for_today, user_id))
+    return rank_up, new_rank
+
+
+
+@router.callback_query(F.data == "ws_rest_back")
+async def ws_rest_back(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    await _back_to_today(callback, bot, state)
+
+
+
+@router.callback_query(F.data == "ws_pick_day")
+async def ws_pick_day(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    user_id = callback.from_user.id
+    plan_data = get_ai_plan(user_id)
+    if not plan_data:
+        await callback.answer("План не найден", show_alert=True)
+        return
+    days = plan_day_options(plan_data, user_id)
+    if not days:
+        await callback.answer("В плане нет тренировочных дней", show_alert=True)
+        return
+    lines = ["Какой день из плана сделать сегодня?", ""]
+    lines += [f"{d['label']}: {', '.join(d['exercises'])}" for d in days]
+    buttons = [(d["key"], f"{d['label']} · {len(d['exercises'])} упр.") for d in days]
+    await callback.message.edit_text("\n".join(lines), reply_markup=ws_pick_day_keyboard(buttons))
+    await callback.answer()
+
+
+
+@router.callback_query(F.data.startswith("ws_day_"))
+async def ws_pick_day_chosen(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    user_id = callback.from_user.id
+    plan_data = get_ai_plan(user_id)
+    if not plan_data:
+        await callback.answer("План не найден", show_alert=True)
+        return
+    _, error = start_plan_day(user_id, plan_data, callback.data[len("ws_day_"):])
+    if error:
+        await callback.answer("Этого дня нет в плане" if error == "bad_day"
+                              else "На сегодня тренировка уже есть", show_alert=True)
+        return
+    await _back_to_today(callback, bot, state)
+
+
+
+@router.callback_query(WorkoutSessionState.viewing_plan, F.data == "ws_extra_cancel")
+async def ws_extra_cancel(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    user_id = callback.from_user.id
+    session = get_today_session(user_id)
+    if session and session["status"] == "pending":
+        delete_session(user_id, session["id"])
+    await _back_to_today(callback, bot, state)
+
+
+
+@router.callback_query(F.data == "ws_free_log")
+async def ws_free_log_start(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    user_id = callback.from_user.id
+    await state.set_state(WorkoutSessionState.free_logging)
+    user_temp_messages.setdefault(user_id, {})["workout_menu"] = callback.message.message_id
+    await callback.message.edit_text(
+        "Напиши, что сделал. Например:\n"
+        "Жим лёжа 3×10 60кг, подтягивания 3×8, бег 5 км за 30 мин",
+        reply_markup=ws_free_log_keyboard())
+    await callback.answer()
+
+
+
+@router.message(WorkoutSessionState.free_logging)
+async def ws_free_log_input(message: Message, bot: Bot, state: FSMContext):
+    user_id = message.from_user.id
+    raw = (message.text or "").strip()
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    if not raw:
+        return
+    await _edit_workout_menu(message, bot, user_id, "Записываю...", None)
+    items = await run_in_thread(gemini_parse_free_workout, raw)
+    if not items:
+        await _edit_workout_menu(message, bot, user_id,
+                                 "Не получилось разобрать. Опиши иначе — упражнение, подходы×повторения, вес:",
+                                 ws_free_log_keyboard())
+        return
+    session, results = save_free_workout(user_id, items, raw)
+    await state.clear()
+    if not session:
+        await _edit_workout_menu(message, bot, user_id, "На сегодня тренировка уже записана.",
+                                 ws_rest_day_keyboard())
+        return
+    lines = ["Тренировка записана\n"]
+    lines += [f"✅ {r['exercise_name']} {_format_result(r['result'])}".rstrip() for r in results]
+    rank_up, new_rank = _count_workout(user_id)
+    plan_data = get_ai_plan(user_id)
+    next_date, next_day = get_next_training_day(plan_data, user_id) if plan_data else (None, None)
+    if next_date:
+        lines.append(f"\nСледующая тренировка: {next_day}, {next_date}")
+    if rank_up:
+        lines.append(f"\n✨ Новый ранг: {get_rank_name(new_rank)}!")
+    await _edit_workout_menu(message, bot, user_id, "\n".join(lines), ws_rest_day_keyboard())
 
 
 
@@ -1400,14 +1562,9 @@ async def ws_exercise_done(callback: CallbackQuery, bot: Bot, state: FSMContext)
     # Записываем как выполнено по плану
     result = {"sets_done": ex.get("sets"), "reps_done": ex.get("reps"),
                "weight_done": ex.get("weight"), "completed": True, "note": None}
-    db.execute("""
-        INSERT INTO ai_exercise_logs (session_id, user_id, exercise_name, planned_json, result_json, status)
-        VALUES (?, ?, ?, ?, ?, 'done')
-    """, (session_id, user_id, ex.get("exercise", ex.get("name")),
-           json.dumps(ex, ensure_ascii=False), json.dumps(result, ensure_ascii=False)))
-    db.commit()
+    log_exercise(session_id, user_id, exercise_name(ex), ex, result)
     await state.update_data(exercise_index=index + 1)
-    await _next_exercise_or_finish(callback, bot, state, user_id)
+    await _advance(callback.message, bot, state, user_id, plan_raise_target(ex))
     await callback.answer()
 
 
@@ -1427,7 +1584,7 @@ async def ws_exercise_skip(callback: CallbackQuery, bot: Bot, state: FSMContext)
            json.dumps(ex, ensure_ascii=False)))
     db.commit()
     await state.update_data(exercise_index=index + 1)
-    await _next_exercise_or_finish(callback, bot, state, user_id)
+    await _next_exercise_or_finish(callback.message, bot, state, user_id)
     await callback.answer()
 
 
@@ -1458,58 +1615,182 @@ async def ws_exercise_prev(callback: CallbackQuery, bot: Bot, state: FSMContext)
 @router.message(WorkoutSessionState.in_exercise)
 async def ws_exercise_text_input(message: Message, bot: Bot, state: FSMContext):
     user_id = message.from_user.id
+    raw = (message.text or "").strip()
     try:
         await message.delete()
     except:
         pass
+    if not raw:
+        return
     data = await state.get_data()
     exercises = data.get("exercises", [])
     index = data.get("exercise_index", 0)
     session_id = data.get("session_id")
     ex = exercises[index]
-    temps = user_temp_messages.get(user_id, {})
-    msg_id = temps.get("workout_menu")
-    if msg_id:
-        try:
-            await bot.edit_message_text("Записываю...", message.chat.id, msg_id)
-        except:
-            pass
-    result = await run_in_thread(gemini_parse_exercise_result, ex, message.text.strip())
-    db.execute("""
-        INSERT INTO ai_exercise_logs
-        (session_id, user_id, exercise_name, planned_json, raw_input, result_json, status)
-        VALUES (?, ?, ?, ?, ?, ?, 'done')
-    """, (session_id, user_id, ex.get("exercise", ex.get("name")),
-           json.dumps(ex, ensure_ascii=False), message.text.strip(),
-           json.dumps(result, ensure_ascii=False)))
-    db.commit()
+    await _edit_workout_menu(message, bot, user_id, "Записываю...", None)
+    result = await run_in_thread(gemini_parse_exercise_result, ex, raw)
+    log_exercise(session_id, user_id, exercise_name(ex), ex, result, raw_input=raw)
     await state.update_data(exercise_index=index + 1)
-    # Передаём message для edit через фейк
-    class FakeCallback:
-        def __init__(self, msg, uid):
-            self.message = msg
-            self.from_user = type("U", (), {"id": uid})()
-        async def answer(self): pass
-    fake = FakeCallback(message, user_id)
-    await _next_exercise_or_finish(fake, bot, state, user_id)
+    await _advance(message, bot, state, user_id, plan_raise_target(ex, result))
 
 
 
-async def _next_exercise_or_finish(callback, bot: Bot, state: FSMContext, user_id: int):
+# ── Разовая замена упражнения ───────────────────────────────────────────────
+
+@router.callback_query(WorkoutSessionState.in_exercise, F.data == "ws_ex_replace")
+async def ws_exercise_replace(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    user_id = callback.from_user.id
+    data = await state.get_data()
+    ex = data.get("exercises", [])[data.get("exercise_index", 0)]
+    name = exercise_name(ex)
+    suggestions = []
+    for sub in substitution_suggestions(user_id, name):
+        res = {"sets_done": sub["sets"], "reps_done": sub["reps"], "weight_done": sub["weight"]}
+        suggestions.append((sub["id"], f"{sub['name']} {_format_result(res)}".rstrip()))
+    text = (f"Замена: {name}\n\n"
+            "Напиши, что сделал вместо — например «Жим гантелей 3×10 24кг».")
+    if suggestions:
+        text += "\nИли выбери, что делал в прошлые разы:"
+    await state.set_state(WorkoutSessionState.replacing_exercise)
+    await _edit_workout_menu(callback.message, bot, user_id, text, ws_replace_keyboard(suggestions))
+    await callback.answer()
+
+
+
+@router.callback_query(WorkoutSessionState.replacing_exercise, F.data == "ws_sub_back")
+async def ws_replace_back(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    data = await state.get_data()
+    await _show_exercise(callback.message, bot, state, callback.from_user.id,
+                         data.get("exercise_index", 0), data.get("exercises", []))
+    await callback.answer()
+
+
+
+@router.callback_query(WorkoutSessionState.replacing_exercise, F.data.startswith("ws_sub_"))
+async def ws_replace_suggestion(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    user_id = callback.from_user.id
+    try:
+        sub = get_exercise_substitution(user_id, int(callback.data[len("ws_sub_"):]))
+    except ValueError:
+        sub = None
+    if not sub:
+        await callback.answer("Замена не найдена", show_alert=True)
+        return
+    data = await state.get_data()
+    index = data.get("exercise_index", 0)
+    ex = data.get("exercises", [])[index]
+    # Одно нажатие — повторяем прошлую замену с теми же цифрами
+    _, raise_target = log_substitution_repeat(user_id, data.get("session_id"), ex, sub)
+    await state.update_data(exercise_index=index + 1)
+    await _advance(callback.message, bot, state, user_id, raise_target)
+    await callback.answer()
+
+
+
+@router.message(WorkoutSessionState.replacing_exercise)
+async def ws_replace_text_input(message: Message, bot: Bot, state: FSMContext):
+    user_id = message.from_user.id
+    raw = (message.text or "").strip()
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    if not raw:
+        return
+    data = await state.get_data()
+    index = data.get("exercise_index", 0)
+    ex = data.get("exercises", [])[index]
+    original = exercise_name(ex)
+    await _edit_workout_menu(message, bot, user_id, "Записываю...", None)
+    items = await run_in_thread(gemini_parse_free_workout, raw)
+    if not items:
+        await _edit_workout_menu(message, bot, user_id,
+                                 "Не получилось разобрать. Опиши иначе — упражнение, подходы×повторения, вес:",
+                                 ws_replace_keyboard([]))
+        return
+    _, raise_target = log_substitution_items(user_id, data.get("session_id"), ex, items, raw)
+    await state.update_data(exercise_index=index + 1)
+    await _advance(message, bot, state, user_id, raise_target)
+
+
+
+# ── Цель выполнена → поднять вес? ────────────────────────────────────────────
+
+async def _advance(message, bot: Bot, state: FSMContext, user_id: int, raise_target=None):
+    """После записи упражнения: если цель с весом выполнена — сначала спросить
+    про вес, иначе сразу следующее упражнение / конец тренировки."""
+    if not raise_target:
+        await _next_exercise_or_finish(message, bot, state, user_id)
+        return
+    await state.update_data(pending_raise=raise_target, raise_custom=False)
+    await state.set_state(WorkoutSessionState.raising_weight)
+    text = (f"Цель выполнена 💪\n{raise_target['name']} — {format_weight(raise_target['weight'])} кг\n\n"
+            "Поднять вес в следующий раз?")
+    await _edit_workout_menu(message, bot, user_id, text, ws_raise_weight_keyboard())
+
+
+
+@router.callback_query(WorkoutSessionState.raising_weight, F.data.startswith("ws_raise_"))
+async def ws_raise_weight(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    user_id = callback.from_user.id
+    choice = callback.data[len("ws_raise_"):]
+    data = await state.get_data()
+    target = data.get("pending_raise")
+    if choice == "custom":
+        await state.update_data(raise_custom=True)
+        await callback.message.edit_text("На сколько кг поднять? Напиши число, например 3.75:")
+        await callback.answer()
+        return
+    if target and choice != "keep":
+        new_weight = apply_weight_raise(user_id, target, float(choice))
+        await callback.answer(f"В следующий раз: {format_weight(new_weight)} кг")
+    else:
+        await callback.answer()
+    await state.update_data(pending_raise=None)
+    await _next_exercise_or_finish(callback.message, bot, state, user_id)
+
+
+
+@router.message(WorkoutSessionState.raising_weight)
+async def ws_raise_weight_custom(message: Message, bot: Bot, state: FSMContext):
+    user_id = message.from_user.id
+    raw = (message.text or "").strip().lstrip("+").replace(",", ".")
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    data = await state.get_data()
+    target = data.get("pending_raise")
+    if not data.get("raise_custom") or not target:
+        return
+    try:
+        increment = float(raw)
+        if not 0 < increment <= 100:
+            raise ValueError
+    except ValueError:
+        await _edit_workout_menu(message, bot, user_id,
+                                 "Нужно число больше нуля, например 3.75:", None)
+        return
+    apply_weight_raise(user_id, target, increment)
+    await state.update_data(pending_raise=None, raise_custom=False)
+    await _next_exercise_or_finish(message, bot, state, user_id)
+
+
+
+async def _next_exercise_or_finish(message, bot: Bot, state: FSMContext, user_id: int):
     data = await state.get_data()
     exercises = data.get("exercises", [])
     index = data.get("exercise_index", 0)
     if index < len(exercises):
-        await _show_exercise(callback.message, bot, state, user_id, index, exercises)
+        await _show_exercise(message, bot, state, user_id, index, exercises)
     else:
-        await _finish_workout(callback.message, bot, state, user_id)
+        await _finish_workout(message, bot, state, user_id)
 
 
 
 async def _finish_workout(message, bot: Bot, state: FSMContext, user_id: int):
     data = await state.get_data()
     session_id = data.get("session_id")
-    exercises = data.get("exercises", [])
     today = user_today_str(user_id)
 
     # Помечаем сессию как выполненную
@@ -1518,40 +1799,18 @@ async def _finish_workout(message, bot: Bot, state: FSMContext, user_id: int):
     db.commit()
 
     logs = get_session_exercise_logs(session_id)
-    done = [l for l in logs if l["status"] == "done"]
-    skipped = [l for l in logs if l["status"] == "skipped"]
-
-    # Фидбек от ИИ
-    feedback = await run_in_thread(gemini_session_feedback, logs, exercises)
-
-    # Адаптируем план
-    prev_sessions = data.get("prev_sessions", [])
-    adapted = await run_in_thread(gemini_adapt_next_session, exercises, logs, prev_sessions)
-    if adapted != exercises:
-        session = get_today_session(user_id)
-        if session:
-            update_session_exercise_plan(user_id, session_id,
-                                          session.get("session_key", ""), adapted)
-
-    # Обновляем счётчик тренировок
-    add_workout(user_id)
-    success, _, rank_up, _, new_rank = add_spark(user_id, "workout")
-    update_streak(user_id)
-    asyncio.create_task(run_in_thread(sync_activity_rating_for_today, user_id))
+    rank_up, new_rank = _count_workout(user_id)
 
     # Строим итоговое сообщение
     lines = ["Тренировка завершена\n"]
     for log in logs:
+        res = log.get("result") or {}
         if log["status"] == "skipped":
             lines.append(f"⏭ {log['exercise_name']} — пропущено")
-        elif log.get("result") and log["result"].get("note"):
-            lines.append(f"⚠️ {log['exercise_name']} — {log['result']['note']}")
-
-    feedback_failed = feedback.startswith("❌")
-    if feedback_failed:
-        lines.append("\n❌ ИИ не смог подготовить фидбек.")
-    else:
-        lines.append(f"\n{feedback}")
+        elif res.get("replaced"):
+            lines.append(f"🔄 {log['exercise_name']} — вместо «{res['replaced']}»")
+        elif res.get("note"):
+            lines.append(f"⚠️ {log['exercise_name']} — {res['note']}")
 
     plan_data = get_ai_plan(user_id)
     next_date, next_day = get_next_training_day(plan_data, user_id) if plan_data else (None, None)
@@ -1560,25 +1819,8 @@ async def _finish_workout(message, bot: Bot, state: FSMContext, user_id: int):
     if rank_up:
         lines.append(f"\n✨ Новый ранг: {get_rank_name(new_rank)}!")
 
-    text = "\n".join(lines)
-    # Кнопка повтора фидбека (без ретипинга) — данные сессии уже сохранены
-    finish_kb = retry_ai_keyboard("session_feedback") if feedback_failed else ws_rest_day_keyboard()
     await state.clear()
-    # Сохраняем после clear() — данные нужны для повтора фидбека
-    await state.update_data(retry_session_id=session_id,
-                            retry_session_exercises=exercises)
-    temps = user_temp_messages.get(user_id, {})
-    msg_id = temps.get("workout_menu")
-    if msg_id:
-        try:
-            await bot.edit_message_text(text, message.chat.id, msg_id,
-                                         reply_markup=finish_kb)
-            return
-        except:
-            pass
-    msg = await message.answer(text, reply_markup=finish_kb)
-    temps["workout_menu"] = msg.message_id
-    user_temp_messages[user_id] = temps
+    await _edit_workout_menu(message, bot, user_id, "\n".join(lines), ws_rest_day_keyboard())
 
 
 

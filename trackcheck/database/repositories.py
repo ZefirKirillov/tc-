@@ -692,6 +692,7 @@ def delete_all_workout_data(user_id: int):
     db.execute("DELETE FROM ai_workout_plan WHERE user_id = ?", (user_id,))
     db.execute("DELETE FROM ai_workout_sessions WHERE user_id = ?", (user_id,))
     db.execute("DELETE FROM ai_exercise_logs WHERE user_id = ?", (user_id,))
+    db.execute("DELETE FROM exercise_substitutions WHERE user_id = ?", (user_id,))
     db.execute("DELETE FROM workout_log WHERE user_id = ?", (user_id,))
     db.execute("DELETE FROM exercises WHERE user_id = ?", (user_id,))
     db.execute("DELETE FROM exercise_categories WHERE user_id = ?", (user_id,))
@@ -853,6 +854,88 @@ def update_session_exercise_plan(user_id: int, session_id: int,
             if week_key in plan and day_key in plan[week_key]:
                 plan[week_key][day_key] = new_exercises
                 update_plan_json(user_id, plan)
+    db.commit()
+
+
+
+def create_extra_session(user_id: int, session_key: str, exercises: list,
+                         status: str = "pending") -> Optional[dict]:
+    """Создаёт сессию на сегодня вне расписания (день отдыха): день из плана
+    (session_key = ключ того дня, чтобы «прошлый раз» совпадал) или
+    свободная запись (session_key = "free"). None если сессия уже есть."""
+    today = user_today_str(user_id)
+    try:
+        db.execute("""
+            INSERT INTO ai_workout_sessions (user_id, date, weekday, session_key, plan_json, status, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, today, user_weekday(user_id), session_key,
+              json.dumps(exercises, ensure_ascii=False), status,
+              today if status == "done" else None))
+        db.commit()
+    except Exception as e:
+        if not _is_unique_violation(e):
+            print(f"[SESSION] Extra insert error: {e}")
+        return None
+    return get_today_session(user_id)
+
+
+
+def delete_session(user_id: int, session_id: int):
+    db.execute("DELETE FROM ai_exercise_logs WHERE session_id = ? AND user_id = ?",
+               (session_id, user_id))
+    db.execute("DELETE FROM ai_workout_sessions WHERE id = ? AND user_id = ?",
+               (session_id, user_id))
+    db.commit()
+
+
+
+def add_exercise_substitution(user_id: int, original_name: str, substitute_name: str,
+                              sets, reps, weight) -> int:
+    cursor = db.execute("""
+        INSERT INTO exercise_substitutions (user_id, original_name, substitute_name, sets, reps, weight)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (user_id, original_name, substitute_name, sets,
+          None if reps is None else str(reps), weight))
+    db.commit()
+    return cursor.lastrowid
+
+
+
+def get_exercise_substitutions(user_id: int, original_name: str, limit: int = 3) -> list:
+    """Последние разные замены упражнения (новые первыми), с последними цифрами."""
+    # Сравниваем в Python: lower() в SQLite не понимает кириллицу
+    cursor = db.execute("""
+        SELECT * FROM exercise_substitutions WHERE user_id = ?
+        ORDER BY id DESC LIMIT 1000
+    """, (user_id,))
+    original = original_name.strip().lower()
+    seen, out = set(), []
+    for row in cursor.fetchall():
+        d = dict(row)
+        if d["original_name"].strip().lower() != original:
+            continue
+        key = d["substitute_name"].strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(d)
+        if len(out) >= limit:
+            break
+    return out
+
+
+
+def get_exercise_substitution(user_id: int, sub_id: int) -> Optional[dict]:
+    cursor = db.execute("SELECT * FROM exercise_substitutions WHERE id = ? AND user_id = ?",
+                        (sub_id, user_id))
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+
+def set_substitution_weight(user_id: int, sub_id: int, weight: float):
+    db.execute("UPDATE exercise_substitutions SET weight = ? WHERE id = ? AND user_id = ?",
+               (weight, sub_id, user_id))
     db.commit()
 
 

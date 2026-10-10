@@ -1058,57 +1058,29 @@ def gemini_parse_exercise_result(exercise: dict, raw_text: str) -> dict:
 
 
 
-def gemini_session_feedback(session_logs: list, plan_exercises: list) -> str:
-    """Генерирует краткий фидбек по завершённой тренировке."""
-    done = [l for l in session_logs if l["status"] == "done"]
-    skipped = [l for l in session_logs if l["status"] == "skipped"]
-    done_results = [l.get("result") if isinstance(l, dict) else None for l in done]
-    skipped_names = [l["exercise_name"] for l in skipped]
-    plan_json = json.dumps(plan_exercises, ensure_ascii=False)
-    done_json = json.dumps(done_results, ensure_ascii=False)
-    skipped_str = str(skipped_names)
-    prompt = (
-        "Пользователь завершил тренировку.\n"
-        f"План: {plan_json}\n"
-        f"Выполнено: {done_json}\n"
-        f"Пропущено: {skipped_str}\n\n"
-        "Напиши КРАТКИЙ фидбек (2-3 предложения). "
-        "Только если есть прогресс — отметь. Если что-то пропущено — упомяни. Без воды."
-    )
-    return gemini_generate(prompt, max_tokens=300)
+def gemini_parse_free_workout(raw_text: str) -> list:
+    """Разбирает свободное описание тренировки в список упражнений с результатами."""
+    prompt = f"""Пользователь описал, что сделал на тренировке:
+"{raw_text}"
 
+Верни ТОЛЬКО JSON:
+{{"exercises": [
+  {{"exercise": "Жим гантелей лёжа", "sets_done": 3, "reps_done": "10", "weight_done": 24, "note": null}}
+]}}
 
-
-def gemini_adapt_next_session(plan_exercises: list, session_logs: list,
-                               prev_sessions: list) -> list:
-    """Адаптирует план следующей такой же тренировки на основе результатов."""
-    logs_summary = [
-        {
-            "exercise": l["exercise_name"],
-            "result": l.get("result"),
-            "status": l["status"]
-        }
-        for l in session_logs
-    ]
-    plan_json = json.dumps(plan_exercises, ensure_ascii=False)
-    logs_json = json.dumps(logs_summary, ensure_ascii=False)
-    prompt = (
-        "Ты тренер. Адаптируй план следующей тренировки на основе результатов.\n\n"
-        f"Текущий план:\n{plan_json}\n\n"
-        f"Результаты сегодня:\n{logs_json}\n\n"
-        "Верни ТОЛЬКО JSON — обновлённый список упражнений (та же структура).\n"
-        "Меняй только sets/reps/weight. Упражнения не меняй. Только JSON."
-    )
-    result = gemini_generate(prompt, max_tokens=1024, raw=True)
-    parsed = _parse_json_response(result)
-    if isinstance(parsed, list):
-        return parsed
-    # Если вернул dict с вложенным списком
-    if isinstance(parsed, dict):
-        for v in parsed.values():
-            if isinstance(v, list):
-                return v
-    return plan_exercises
+Правила:
+- exercise: нормальное название упражнения на русском, с большой буквы
+- reps_done: строка; если повторения по подходам разные — через запятую ("10,10,8")
+- для кардио/статики sets_done и reps_done могут быть null, тогда время/дистанцию напиши в note ("5 км за 30 мин")
+- weight_done: число в кг или null
+- note: только если есть что-то важное, иначе null
+- если упражнений нет — пустой список
+- Только JSON"""
+    parsed = _parse_json_response(gemini_generate(prompt, max_tokens=1024, raw=True))
+    exercises = parsed.get("exercises") if isinstance(parsed, dict) else None
+    if not isinstance(exercises, list):
+        return []
+    return [e for e in exercises if isinstance(e, dict) and e.get("exercise")]
 
 
 

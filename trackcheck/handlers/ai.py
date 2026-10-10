@@ -10,8 +10,7 @@ from aiogram.types import CallbackQuery, Message
 
 from trackcheck.database.connection import db
 from trackcheck.database.repositories import (
-    get_user_name, get_ai_plan, get_session_exercise_logs, get_next_training_day,
-    get_or_create_rank_data, save_rating, save_last_ai_answer, add_spark,
+    get_user_name, get_ai_plan, save_rating, save_last_ai_answer, add_spark,
     update_streak, check_all_categories_completed, get_last_ai_answer,
 )
 from trackcheck.states.category import RatingState
@@ -20,13 +19,12 @@ from trackcheck.states.food import DietState
 from trackcheck.states.settings import AIAdvisorState
 from trackcheck.services.ai_service import (
     gemini_generate, gemini_generate_rating, gemini_generate_plan,
-    gemini_parse_manual_plan, _fallback_parse_plan, gemini_session_feedback,
+    gemini_parse_manual_plan, _fallback_parse_plan,
     gemini_monthly_review, get_full_context_for_ai, analyze_low_rating,
     analyze_food_photo, analyze_body_photo, estimate_food_calories, stream_answer,
     check_question_prompt, check_advice_prompt,
 )
 from trackcheck.services.workout_service import _format_full_plan
-from trackcheck.services.gamification_service import get_rank_name
 from trackcheck.utils.concurrency import run_in_thread, run_db
 from trackcheck.utils.dates import user_today_str
 from trackcheck.utils.bot_helpers import delete_message_safe, delete_temp_messages
@@ -36,7 +34,7 @@ from trackcheck.keyboards.categories import reflection_keyboard
 from trackcheck.keyboards.food import diet_confirm_food_keyboard
 from trackcheck.keyboards.workouts import (
     wp_plan_review_keyboard, wp_plan_review_keyboard_manual, wp_edit_keyboard,
-    wp_settings_keyboard, ws_rest_day_keyboard,
+    wp_settings_keyboard,
 )
 from trackcheck.runtime import user_temp_messages, user_last_menu, nav_push
 from trackcheck.handlers.dashboard import send_main_menu
@@ -69,8 +67,6 @@ async def retry_ai_action(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await _retry_manual_plan(callback, bot, state)
     elif action == "monthly_review":
         await _retry_monthly_review(callback, bot, state)
-    elif action == "session_feedback":
-        await _retry_session_feedback(callback, bot, state)
     await callback.answer()
 
 
@@ -603,41 +599,3 @@ async def show_last_ai(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await callback.message.answer(f"<b>Последний ответ ИИ:</b>\n\n{last_answer}", parse_mode="HTML", reply_markup=ai_reply_keyboard())
     else:
         await callback.answer("Нет сохранённого ответа", show_alert=True)
-
-
-
-async def _retry_session_feedback(callback, bot, state):
-    """Повторно генерирует ИИ-фидбек по завершённой тренировке."""
-    data = await state.get_data()
-    session_id = data.get("retry_session_id")
-    exercises = data.get("retry_session_exercises") or []
-    user_id = callback.from_user.id
-    if not session_id:
-        await callback.answer("Данные тренировки не найдены", show_alert=True)
-        return
-    await bot.send_chat_action(callback.message.chat.id, action=ChatAction.TYPING)
-    logs = await run_db(get_session_exercise_logs, session_id)
-    feedback = await run_in_thread(gemini_session_feedback, logs, exercises)
-    if feedback.startswith("❌"):
-        await callback.message.edit_text(
-            "❌ ИИ снова не смог подготовить фидбек.\n\n"
-            "🔄 Нажми кнопку чтобы попробовать ещё раз.",
-            reply_markup=retry_ai_keyboard("session_feedback")
-        )
-        return
-    lines = ["Тренировка завершена\n"]
-    for log in logs:
-        if log["status"] == "skipped":
-            lines.append(f"⏭ {log['exercise_name']} — пропущено")
-        elif log.get("result") and log["result"].get("note"):
-            lines.append(f"⚠️ {log['exercise_name']} — {log['result']['note']}")
-    lines.append(f"\n{feedback}")
-    plan_data = await run_db(get_ai_plan, user_id)
-    next_date, next_day = get_next_training_day(plan_data, user_id) if plan_data else (None, None)
-    if next_date:
-        lines.append(f"\nСледующая тренировка: {next_day}, {next_date}")
-    rank_data = await run_db(get_or_create_rank_data, user_id)
-    if rank_data:
-        lines.append(f"\n✨ Текущий ранг: {get_rank_name(rank_data['current_rank'])}!")
-    await callback.message.edit_text("\n".join(lines),
-                                      reply_markup=ws_rest_day_keyboard())

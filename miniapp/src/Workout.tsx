@@ -17,8 +17,17 @@ function target(ex: any) {
 function resultText(r: any) {
   if (!r) return ''
   const w = fmtWeight(r.weight_done)
-  return `${r.sets_done ?? '?'}×${r.reps_done ?? '?'}${w ? ` · ${w}` : ''}`
+  const sr = r.sets_done != null || r.reps_done != null ? `${r.sets_done ?? '?'}×${r.reps_done ?? '?'}` : ''
+  return [sr, w, !sr && !w ? r.note : ''].filter(Boolean).join(' · ')
 }
+
+/** Which plan exercise a log belongs to — a replacement is logged under its own
+ *  name but keeps the planned exercise it stands in for. */
+function logKey(l: any) {
+  return l.planned ? exName(l.planned) : l.exercise_name
+}
+
+const RAISE_STEPS = [1.25, 2.5, 5]
 
 const DAYS: Array<[string, string]> = [
   ['monday', 'Понедельник'], ['tuesday', 'Вторник'], ['wednesday', 'Среда'], ['thursday', 'Четверг'],
@@ -60,7 +69,7 @@ function PlanPreview({ plan }: { plan: any }) {
 // Where the session stands, derived from a /api/workout response.
 function sessionState(d: any) {
   if (!d) return { idx: 0, sessionId: null as number | null, finished: false }
-  const logged = new Set((d.logs ?? []).map((x: any) => x.exercise_name))
+  const logged = new Set((d.logs ?? []).map(logKey))
   const exs: any[] = d.today_exercises ?? []
   let idx = exs.findIndex((e) => !logged.has(exName(e)))
   if (idx === -1) idx = exs.length
@@ -93,6 +102,17 @@ export default function Workout() {
   const [review, setReview] = useState<any>(null)
   const [reviewBusy, setReviewBusy] = useState(false)
   const [accepted, setAccepted] = useState<Set<number>>(new Set())
+  // Rest day: log a workout as text, or run one of the plan's days today
+  const [restSheet, setRestSheet] = useState<null | 'free' | 'pick'>(null)
+  const [freeTxt, setFreeTxt] = useState('')
+  const [confirmCancel, setConfirmCancel] = useState(false)
+  // One-off replacement of the current exercise
+  const [replacing, setReplacing] = useState(false)
+  const [subs, setSubs] = useState<any[] | null>(null)
+  const [replaceTxt, setReplaceTxt] = useState('')
+  // Weighted goal hit → offer to raise the weight next time
+  const [raiseT, setRaiseT] = useState<any>(null)
+  const [raiseCustom, setRaiseCustom] = useState('')
 
   function setData(d: any) {
     setDataRaw(keep('workout', d))
@@ -129,12 +149,13 @@ export default function Workout() {
     setBusy(true)
     try {
       const ex = exs[idx]
-      await api.workoutLog(sessionId, ex, action)
+      const r = await api.workoutLog(sessionId, ex, action)
       if (action === 'done') pulseOk(exPulse(idx)); else haptic()
       // Mirror what the server stored (same default result as api_workout_log_ex) — no re-fetch.
       appendLog(ex, action === 'done' ? 'done' : 'skipped',
         action === 'done' ? { sets_done: ex.sets, reps_done: ex.reps, weight_done: ex.weight, completed: true } : null)
       setIdx(idx + 1)
+      if (r.raise) openRaise(r.raise)
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
@@ -151,11 +172,91 @@ export default function Workout() {
       setTxt('')
       setManual(false)
       setIdx(idx + 1)
+      if (r.raise) openRaise(r.raise)
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
   function appendLog(ex: any, status: 'done' | 'skipped', result: any) {
     setData({ ...data, logs: [...(data.logs ?? []), { exercise_name: exName(ex), status, result, planned: ex }] })
+  }
+
+  async function openReplace() {
+    hapticSelect()
+    setReplacing(true)
+    setReplaceTxt('')
+    setSubs(null)
+    try { setSubs((await api.workoutSubs(exName(exs[idx]))).suggestions) }
+    catch { setSubs([]) } // suggestions are optional — typing still works
+  }
+
+  async function replace(replacement: { text: string } | { sub_id: number }) {
+    if (!sessionId || idx >= exs.length) return
+    setBusy(true)
+    try {
+      const ex = exs[idx]
+      const r = await api.workoutReplace(sessionId, ex, replacement)
+      pulseOk(exPulse(idx))
+      setData({ ...data, logs: [...(data.logs ?? []),
+        ...r.logs.map((l: any) => ({ exercise_name: l.exercise_name, status: 'done', result: l.result, planned: ex }))] })
+      b.setOk(`Записано вместо «${exName(ex)}»: ${r.logs.map((l: any) => l.exercise_name).join(', ')}`)
+      setReplacing(false)
+      setManual(false)
+      setIdx(idx + 1)
+      if (r.raise) openRaise(r.raise)
+    } catch (e) { b.setErr(e) } finally { setBusy(false) }
+  }
+
+  function openRaise(t: any) {
+    setRaiseCustom('')
+    setRaiseT(t)
+  }
+
+  async function raise(increment: number) {
+    if (!raiseT) return
+    if (!(increment > 0 && increment <= 100)) { b.setErr('Прибавка — число от 0 до 100 кг.'); return }
+    setBusy(true)
+    try {
+      const r = await api.workoutRaise(raiseT, increment)
+      b.setOk(`${raiseT.name}: в следующий раз ${fmtWeight(r.weight)}`)
+      haptic()
+      setRaiseT(null)
+    } catch (e) { b.setErr(e) } finally { setBusy(false) }
+  }
+
+  async function logFree() {
+    if (freeTxt.trim().length < 3) return
+    setBusy(true)
+    try {
+      const r = await api.workoutFree(freeTxt.trim())
+      const extra = [r.spark_awarded && '+1 искра', r.rank_up && 'новый ранг'].filter(Boolean).join(' · ')
+      b.setOk(`Тренировка записана: ${r.logs.length} упр.${extra ? ` · ${extra}` : ''}`,
+        r.spark_awarded || r.rank_up ? 'event' : 'ok')
+      setRestSheet(null)
+      setFreeTxt('')
+      await load()
+      pulseOk('[data-pulse="finished"]')
+    } catch (e) { b.setErr(e) } finally { setBusy(false) }
+  }
+
+  async function startPlanDay(day: string) {
+    hapticSelect()
+    setBusy(true)
+    try {
+      await api.workoutExtra(day)
+      setRestSheet(null)
+      await load()
+      pulseOk('.ex-now')
+    } catch (e) { b.setErr(e) } finally { setBusy(false) }
+  }
+
+  async function cancelExtra() {
+    setConfirmCancel(false)
+    setBusy(true)
+    try {
+      await api.workoutExtraCancel()
+      b.setOk('Тренировка отменена.')
+      await load()
+    } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
   async function finish() {
@@ -262,7 +363,7 @@ export default function Workout() {
   useBackButton(backHandler, 1)
 
   let main: MainCfg = null
-  if (confirmFinish || tools || !data) main = null
+  if (confirmFinish || confirmCancel || tools || restSheet || replacing || raiseT || !data) main = null
   else if (inWizard) {
     if (w.step === 3) main = { text: 'Сгенерировать план', onClick: genPlan, busy, disabled: !w.goal || !w.level }
     else if (w.step === 4) main = { text: 'Разобрать план', onClick: parseManual, busy, disabled: w.manual.trim().length < 10 }
@@ -364,7 +465,9 @@ export default function Workout() {
   }
 
   const logs: any[] = data.logs ?? []
-  const logByName = new Map(logs.map((l) => [l.exercise_name, l]))
+  const logsByEx = new Map<string, any[]>()
+  for (const l of logs) logsByEx.set(logKey(l), [...(logsByEx.get(logKey(l)) ?? []), l])
+  const extraDay = data.extra?.kind === 'plan_day' ? data.extra.label : null
   const wp = data.week_progress
 
   return (
@@ -384,14 +487,28 @@ export default function Workout() {
 
       {restDay && (
         <Empty icon="moon" title="Сегодня день отдыха"
-          text={data.next ? `Следующая тренировка — ${data.next.day}, ${data.next.date}.` : 'Восстановление — тоже часть плана.'} />
+          text={data.next ? `Следующая тренировка — ${data.next.day}, ${data.next.date}.` : 'Восстановление — тоже часть плана.'}
+          action={
+            <div className="btn-bar" style={{ width: '100%', maxWidth: 320 }}>
+              <button onClick={() => { hapticSelect(); setRestSheet('free') }} className="btn btn-primary">
+                <Ico.pen size={18} /> Записать
+              </button>
+              {(data.plan_days ?? []).length > 0 && (
+                <button onClick={() => { hapticSelect(); setRestSheet('pick') }} className="btn btn-ghost">
+                  <Ico.dumbbell size={18} /> День из плана
+                </button>
+              )}
+            </div>
+          } />
       )}
 
       {!restDay && finished && (
         <div className="panel" data-pulse="finished" style={{ display: 'flex', gap: 12, alignItems: 'center', borderColor: 'var(--accent-line)' }}>
           <Ico.flag size={22} className="accent" />
           <div className="grow">
-            <div style={{ fontWeight: 600 }}>Тренировка на сегодня завершена</div>
+            <div style={{ fontWeight: 600 }}>
+              {data.extra?.kind === 'free' ? 'Тренировка записана' : 'Тренировка на сегодня завершена'}
+            </div>
             <div className="row-meta">
               Выполнено {logs.filter((l) => l.status === 'done').length}, пропущено {logs.filter((l) => l.status === 'skipped').length}
               {data.next ? ` · следующая — ${data.next.day}, ${data.next.date}` : ''}
@@ -418,7 +535,7 @@ export default function Workout() {
         <>
           <div className="rail" aria-hidden="true">
             {exs.map((e, i) => {
-              const st = logByName.get(exName(e))?.status
+              const st = logsByEx.get(exName(e))?.[0]?.status
               const cls = st === 'done' ? 'is-done' : st === 'skipped' ? 'is-skip' : i === idx ? 'is-cur' : ''
               return <i key={i} data-ex={i} className={`rail-node ${cls}`} />
             })}
@@ -426,7 +543,10 @@ export default function Workout() {
 
           {!allMarked ? (
             <div className="panel ex-now">
-              <span className="label">Упражнение <span className="num">{String(idx + 1).padStart(2, '0')}/{String(exs.length).padStart(2, '0')}</span></span>
+              <span className="label">
+                {extraDay && <>{extraDay} · доп. · </>}
+                Упражнение <span className="num">{String(idx + 1).padStart(2, '0')}/{String(exs.length).padStart(2, '0')}</span>
+              </span>
               <div className="ex-name wrap">{exName(exs[idx])}</div>
               <div className="target">
                 <div className="target-cell"><span className="label">Подходы</span><span className="num">{exs[idx].sets ?? '—'}</span></div>
@@ -443,17 +563,26 @@ export default function Workout() {
                   <div className="row-meta" style={{ marginTop: 6 }}>Check разберёт подходы, повторы и вес.</div>
                 </div>
               ) : null}
-              <div className="hstack mt" style={{ gap: 4, marginLeft: -8 }}>
+              <div className="hstack mt" style={{ gap: 4, marginLeft: -8, flexWrap: 'wrap' }}>
                 <button onClick={() => log('skip')} disabled={busy} className="btn btn-quiet btn-sm">
                   <Ico.skip size={15} /> Пропустить
                 </button>
                 <button onClick={() => { hapticSelect(); setManual(!manual); setTxt('') }} disabled={busy} className="btn btn-quiet btn-sm">
                   <Ico.pen size={15} /> {manual ? 'По плану' : 'Записать вручную'}
                 </button>
+                <button onClick={openReplace} disabled={busy} className="btn btn-quiet btn-sm">
+                  <Ico.repeat size={15} /> Заменить
+                </button>
               </div>
             </div>
           ) : (
             <Empty icon="flag" title="Все упражнения отмечены" text="Заверши сессию, чтобы засчитать тренировку и получить искру." />
+          )}
+
+          {extraDay && (
+            <button onClick={() => { hapticSelect(); setConfirmCancel(true) }} disabled={busy} className="btn btn-quiet btn-sm mt">
+              <Ico.back size={15} /> Отменить тренировку
+            </button>
           )}
 
         </>
@@ -464,19 +593,18 @@ export default function Workout() {
       {(active || finished) && logs.length > 0 && (
         <Section label="Сессия" aux={<span className="num muted" style={{ fontSize: 12 }}>{logs.length}/{exs.length}</span>}>
           <div className="rows">
-            {exs.map((e, i) => {
-              const l = logByName.get(exName(e))
-              if (!l) return null
-              return (
-                <div key={i} data-ex={i} className="row">
-                  <span className="row-idx num">{String(i + 1).padStart(2, '0')}</span>
-                  <span className="grow wrap" style={{ color: l.status === 'done' ? undefined : 'var(--text-2)' }}>{exName(e)}</span>
-                  {l.status === 'done'
-                    ? <span className="status-tag is-done">{resultText(l.result) || 'готово'}</span>
-                    : <span className="status-tag is-skip">пропуск</span>}
-                </div>
-              )
-            })}
+            {exs.flatMap((e, i) => (logsByEx.get(exName(e)) ?? []).map((l, j) => (
+              <div key={`${i}-${j}`} data-ex={i} className="row">
+                <span className="row-idx num">{String(i + 1).padStart(2, '0')}</span>
+                <span className="grow wrap" style={{ color: l.status === 'done' ? undefined : 'var(--text-2)' }}>
+                  {l.result?.replaced ? l.exercise_name : exName(e)}
+                  {l.result?.replaced && <span className="row-meta" style={{ display: 'block' }}>вместо «{l.result.replaced}»</span>}
+                </span>
+                {l.status === 'done'
+                  ? <span className="status-tag is-done">{resultText(l.result) || 'готово'}</span>
+                  : <span className="status-tag is-skip">пропуск</span>}
+              </div>
+            )))}
           </div>
         </Section>
       )}
@@ -554,6 +682,94 @@ export default function Workout() {
               </>
             )}
         </Sheet>
+      )}
+
+      {restSheet === 'free' && (
+        <Sheet title="Записать тренировку" onClose={() => setRestSheet(null)}>
+          <p className="muted" style={{ margin: '0 0 10px', fontSize: 14 }}>
+            Опиши, что сделал — Check разберёт упражнения, подходы и вес.
+          </p>
+          <textarea value={freeTxt} onChange={(e) => setFreeTxt(e.target.value)} className="field" autoFocus
+            placeholder={'Жим лёжа 3×10 60кг, подтягивания 3×8,\nбег 5 км за 30 мин'} maxLength={1000} disabled={busy} />
+          <button onClick={logFree} disabled={busy || freeTxt.trim().length < 3} className="btn btn-primary btn-block mt">
+            {busy && <Spinner />} Записать
+          </button>
+        </Sheet>
+      )}
+
+      {restSheet === 'pick' && (
+        <Sheet title="День из плана" onClose={() => setRestSheet(null)}>
+          <div className="muted" style={{ marginBottom: 10, fontSize: 14 }}>Разово, расписание не поменяется.</div>
+          <div className="cells">
+            {(data.plan_days ?? []).map((d: any) => (
+              <button key={d.key} className="cell" disabled={busy} onClick={() => startPlanDay(d.key)}>
+                <span className="cell-icon"><Ico.dumbbell size={20} /></span>
+                <span className="grow"><span className="cell-title" style={{ display: 'block' }}>{d.label}</span>
+                  <span className="cell-sub" style={{ display: 'block' }}>{d.exercises.join(', ')}</span></span>
+              </button>
+            ))}
+          </div>
+        </Sheet>
+      )}
+
+      {replacing && exs[idx] && (
+        <Sheet title={`Замена: ${exName(exs[idx])}`} onClose={() => setReplacing(false)}>
+          <p className="muted" style={{ margin: '0 0 10px', fontSize: 14 }}>
+            Только на сегодня — план не поменяется.
+          </p>
+          {subs == null ? <Skeletons n={2} h={48} /> : subs.length > 0 && (
+            <>
+              <div className="label" style={{ marginBottom: 8 }}>Делал в прошлые разы</div>
+              <div className="rows" style={{ marginBottom: 14 }}>
+                {subs.map((s) => (
+                  <div key={s.id} className="row" role="button" tabIndex={0} style={{ cursor: 'pointer' }}
+                    onClick={() => { if (!busy) replace({ sub_id: s.id }) }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !busy) replace({ sub_id: s.id }) }}>
+                    <span className="grow wrap">{s.name}</span>
+                    <span className="num muted" style={{ fontSize: 13, flex: 'none' }}>
+                      {resultText({ sets_done: s.sets, reps_done: s.reps, weight_done: s.weight })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          <input value={replaceTxt} onChange={(e) => setReplaceTxt(e.target.value)} className="field"
+            placeholder="Что сделал: жим гантелей 3×10 24кг" maxLength={500} disabled={busy}
+            onKeyDown={(e) => { if (e.key === 'Enter' && replaceTxt.trim()) replace({ text: replaceTxt.trim() }) }} />
+          <button onClick={() => replace({ text: replaceTxt.trim() })} disabled={busy || !replaceTxt.trim()}
+            className="btn btn-primary btn-block mt">
+            {busy && <Spinner />} Записать замену
+          </button>
+        </Sheet>
+      )}
+
+      {raiseT && (
+        <Sheet title="Цель выполнена" onClose={() => setRaiseT(null)}>
+          <p style={{ margin: '0 0 12px' }}>
+            {raiseT.name} — <span className="num">{fmtWeight(raiseT.weight)}</span>. Поднять вес в следующий раз?
+          </p>
+          <div className="chips" style={{ flexWrap: 'nowrap' }}>
+            {RAISE_STEPS.map((v) => (
+              <button key={v} onClick={() => raise(v)} disabled={busy} className="chip num grow" style={{ minHeight: 40 }}>
+                +{String(v).replace('.', ',')}
+              </button>
+            ))}
+          </div>
+          <div className="hstack mt" style={{ gap: 8 }}>
+            <input value={raiseCustom} onChange={(e) => setRaiseCustom(e.target.value)} className="field grow"
+              inputMode="decimal" placeholder="Своё, кг" maxLength={6} disabled={busy} />
+            <button onClick={() => raise(Number(raiseCustom.replace(',', '.')))} disabled={busy || !raiseCustom.trim()}
+              className="btn btn-ghost">Поднять</button>
+          </div>
+          <button onClick={() => setRaiseT(null)} disabled={busy} className="btn btn-quiet btn-block mt">Оставить</button>
+        </Sheet>
+      )}
+
+      {confirmCancel && (
+        <Confirm title="Отменить тренировку?"
+          body="Записанные упражнения этой тренировки удалятся. Искра не снимается."
+          okLabel="Отменить" danger onOk={cancelExtra} onCancel={() => setConfirmCancel(false)} />
       )}
 
       {confirmFinish && (

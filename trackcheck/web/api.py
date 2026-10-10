@@ -44,6 +44,9 @@ RU_ERRORS = {
     "no_diet_profile": "Сначала задай норму калорий.",
     "bad_profile": "Проверь данные: вес 20–300 кг, рост 100–250 см, возраст 10–120.",
     "bad_target": "Цель: от 0,1 до 100 кг за 7–730 дней.",
+    "bad_day": "Этого дня нет в плане.",
+    "session_exists": "На сегодня тренировка уже есть.",
+    "bad_increment": "Прибавка — число от 0 до 100 кг.",
 }
 
 
@@ -299,15 +302,28 @@ async def api_workout_get(request: web.Request):
         get_session_exercise_logs, get_weekly_workout_progress,
         get_next_training_day, get_or_create_workout_data,
     )
+    from trackcheck.config import WEEKDAY_KEY, WEEKDAY_RU, WEEKDAY_FROM_KEY
+    from trackcheck.services.workout_service import plan_day_options
+    from trackcheck.utils.dates import user_weekday
     user_id = request["tg_user"]["id"]
 
     def _load():
         plan_data = get_ai_plan(user_id)
         if not plan_data:
             return {"has_plan": False, "workout": get_or_create_workout_data(user_id)}
-        today_ex = get_today_plan(plan_data, user_id) or []
+        scheduled = get_today_plan(plan_data, user_id) or []
         session = get_today_session(user_id)
         logs = get_session_exercise_logs(session["id"]) if session else []
+        # В день отдыха сессия бывает: день из плана или запись текстом
+        today_ex = scheduled
+        extra = None
+        if session:
+            today_ex = session["plan"] if isinstance(session["plan"], list) else list(session["plan"].values())
+            day_key = session["session_key"].split("_", 2)[-1]
+            if session["session_key"] == "free":
+                extra = {"kind": "free", "label": "Своя тренировка"}
+            elif day_key != WEEKDAY_KEY[user_weekday(user_id)]:
+                extra = {"kind": "plan_day", "label": WEEKDAY_RU.get(WEEKDAY_FROM_KEY.get(day_key), day_key)}
         done_count, week_goal = get_weekly_workout_progress(user_id)
         nxt = get_next_training_day(plan_data, user_id)
         return {
@@ -319,6 +335,8 @@ async def api_workout_get(request: web.Request):
             "plan": plan_data.get("plan"),
             "today_exercises": today_ex,
             "is_rest_day": len(today_ex) == 0,
+            "extra": extra,
+            "plan_days": plan_day_options(plan_data, user_id) if not scheduled else [],
             "session": {"id": session["id"], "status": session["status"]} if session else None,
             "logs": [
                 {"exercise_name": l["exercise_name"], "status": l["status"],
@@ -374,6 +392,8 @@ async def api_workout_log_ex(request: web.Request):
     if not ex_name:
         return web.json_response({"ok": False, "error": "bad_exercise"}, status=400)
 
+    from trackcheck.services.workout_service import plan_raise_target
+
     def _log():
         cur = db.execute(
             "SELECT id FROM ai_workout_sessions WHERE id = ? AND user_id = ?",
@@ -381,6 +401,7 @@ async def api_workout_log_ex(request: web.Request):
         if not cur.fetchone():
             return None
         if action == "done":
+            raise_target = plan_raise_target(ex, body.get("result"))
             result = body.get("result") or {
                 "sets_done": ex.get("sets"), "reps_done": ex.get("reps"),
                 "weight_done": ex.get("weight"), "completed": True}
@@ -394,13 +415,14 @@ async def api_workout_log_ex(request: web.Request):
                 "INSERT INTO ai_exercise_logs (session_id, user_id, exercise_name, planned_json, status)"
                 " VALUES (?, ?, ?, ?, 'skipped')",
                 (session_id, user_id, ex_name, _json.dumps(ex, ensure_ascii=False)))
+            raise_target = None
         db.commit()
-        return True
+        return {"logged": True, "raise": raise_target}
 
-    ok = await run_db(_log)
-    if not ok:
+    data = await run_db(_log)
+    if not data:
         return web.json_response({"ok": False, "error": "bad_session"}, status=404)
-    return web.json_response({"ok": True, "data": {"logged": True}})
+    return web.json_response({"ok": True, "data": data})
 
 
 @require_user
@@ -907,8 +929,192 @@ async def api_workout_log_text(request: web.Request):
         db.commit()
         return result
 
+    from trackcheck.services.workout_service import plan_raise_target
     saved = await run_db(_log)
-    return web.json_response({"ok": True, "data": {"result": saved}})
+    return web.json_response({"ok": True, "data": {"result": saved,
+                                                   "raise": plan_raise_target(ex, saved)}})
+
+
+async def _json_body(request: web.Request):
+    try:
+        body = await request.json()
+        return body if isinstance(body, dict) else None
+    except Exception:
+        return None
+
+
+def _own_session(user_id: int, session_id) -> bool:
+    from trackcheck.database.connection import db
+    try:
+        sid = int(session_id)
+    except (TypeError, ValueError):
+        return False
+    cur = db.execute("SELECT id FROM ai_workout_sessions WHERE id = ? AND user_id = ?", (sid, user_id))
+    return bool(cur.fetchone())
+
+
+@require_user
+async def api_workout_extra(request: web.Request):
+    """Rest day: run one of the plan's days today, {day: "monday"}. Schedule unchanged."""
+    from trackcheck.database.repositories import get_ai_plan
+    from trackcheck.services.workout_service import start_plan_day
+    user_id = request["tg_user"]["id"]
+    body = await _json_body(request)
+    if body is None:
+        return _err("bad_json")
+    day = str(body.get("day") or "")
+
+    def _start():
+        plan_data = get_ai_plan(user_id)
+        if not plan_data:
+            return None, "bad_plan"
+        return start_plan_day(user_id, plan_data, day)
+
+    session, error = await run_db(_start)
+    if error:
+        return _err(error, 409 if error == "session_exists" else 400)
+    return web.json_response({"ok": True, "data": {"session_id": session["id"]}})
+
+
+@require_user
+async def api_workout_extra_cancel(request: web.Request):
+    """Drop today's not-finished rest-day session (no spark penalty, unlike a skip)."""
+    from trackcheck.database.repositories import get_today_session, delete_session
+    from trackcheck.config import WEEKDAY_KEY
+    from trackcheck.utils.dates import user_weekday
+    user_id = request["tg_user"]["id"]
+
+    def _cancel():
+        session = get_today_session(user_id)
+        if not session or session["status"] != "pending":
+            return False
+        # Only an extra session — a scheduled day is skipped, not cancelled
+        if session["session_key"].split("_", 2)[-1] == WEEKDAY_KEY[user_weekday(user_id)]:
+            return False
+        delete_session(user_id, session["id"])
+        return True
+
+    if not await run_db(_cancel):
+        return _err("bad_session", 404)
+    return web.json_response({"ok": True, "data": {"cancelled": True}})
+
+
+@require_user
+async def api_workout_free(request: web.Request):
+    """Rest day: log a whole workout from free text, {text}. Counts as done right away."""
+    from trackcheck.utils.concurrency import run_in_thread
+    from trackcheck.services.ai_service import gemini_parse_free_workout
+    from trackcheck.services.workout_service import save_free_workout, count_workout
+    from trackcheck.services.tracker_service import sync_activity_rating_for_today
+    user_id = request["tg_user"]["id"]
+    body = await _json_body(request)
+    if body is None:
+        return _err("bad_json")
+    raw = (body.get("text") or "").strip()[:1000]
+    if len(raw) < 3:
+        return _err("too_short")
+    items = await run_in_thread(gemini_parse_free_workout, raw)
+    if not items:
+        return _err("bad_exercise")
+
+    def _save():
+        session, results = save_free_workout(user_id, items, raw)
+        if not session:
+            return None
+        ok, rank_up, new_rank = count_workout(user_id)
+        sync_activity_rating_for_today(user_id)
+        return {"session_id": session["id"], "logs": results, "spark_awarded": bool(ok),
+                "rank_up": bool(rank_up), "new_rank": new_rank}
+
+    data = await run_db(_save)
+    if not data:
+        return _err("session_exists", 409)
+    return web.json_response({"ok": True, "data": data})
+
+
+@require_user
+async def api_workout_substitutions(request: web.Request):
+    """Last 2–3 different things done instead of ?exercise=, with their numbers."""
+    from trackcheck.services.workout_service import substitution_suggestions
+    user_id = request["tg_user"]["id"]
+    name = (request.query.get("exercise") or "").strip()[:200]
+    if not name:
+        return _err("bad_exercise")
+    subs = await run_db(substitution_suggestions, user_id, name)
+    return web.json_response({"ok": True, "data": {"suggestions": subs}})
+
+
+@require_user
+async def api_workout_replace(request: web.Request):
+    """One-off replacement of a plan exercise: {session_id, exercise, text | sub_id}.
+    The plan is not changed; the replacement is remembered for suggestions."""
+    from trackcheck.utils.concurrency import run_in_thread
+    from trackcheck.database.repositories import get_exercise_substitution
+    from trackcheck.services.ai_service import gemini_parse_free_workout
+    from trackcheck.services.workout_service import (
+        log_substitution_repeat, log_substitution_items,
+    )
+    user_id = request["tg_user"]["id"]
+    body = await _json_body(request)
+    if body is None:
+        return _err("bad_json")
+    ex = body.get("exercise") or {}
+    if not isinstance(ex, dict) or not (ex.get("exercise") or ex.get("name")):
+        return _err("bad_exercise")
+    session_id = body.get("session_id")
+    if not await run_db(_own_session, user_id, session_id):
+        return _err("bad_session", 404)
+    session_id = int(session_id)
+
+    if body.get("sub_id") is not None:
+        try:
+            sub_id = int(body["sub_id"])
+        except (TypeError, ValueError):
+            return _err("bad_id")
+
+        def _repeat():
+            sub = get_exercise_substitution(user_id, sub_id)
+            if not sub:
+                return None
+            result, raise_target = log_substitution_repeat(user_id, session_id, ex, sub)
+            return {"logs": [{"exercise_name": sub["substitute_name"], "result": result}],
+                    "raise": raise_target}
+
+        data = await run_db(_repeat)
+        if not data:
+            return _err("bad_id", 404)
+        return web.json_response({"ok": True, "data": data})
+
+    raw = (body.get("text") or "").strip()[:500]
+    if not raw:
+        return _err("bad_text")
+    items = await run_in_thread(gemini_parse_free_workout, raw)
+    if not items:
+        return _err("bad_exercise")
+    results, raise_target = await run_db(log_substitution_items, user_id, session_id, ex, items, raw)
+    return web.json_response({"ok": True, "data": {"logs": results, "raise": raise_target}})
+
+
+@require_user
+async def api_workout_raise(request: web.Request):
+    """Goal hit → raise the weight next time: {target (from a log response), increment}."""
+    from trackcheck.services.workout_service import apply_weight_raise
+    user_id = request["tg_user"]["id"]
+    body = await _json_body(request)
+    if body is None:
+        return _err("bad_json")
+    target = body.get("target") or {}
+    try:
+        increment = float(str(body.get("increment")).replace(",", "."))
+        float(target["weight"])
+        valid = (0 < increment <= 100 and target.get("kind") in ("plan", "sub")
+                 and (target["kind"] == "plan" or int(target.get("sub_id")) > 0))
+    except (TypeError, ValueError, KeyError):
+        valid = False
+    if not valid:
+        return _err("bad_increment")
+    new_weight = await run_db(apply_weight_raise, user_id, target, increment)
+    return web.json_response({"ok": True, "data": {"weight": new_weight}})
 
 
 @require_user
@@ -1066,6 +1272,12 @@ def create_api_app() -> web.Application:
     app.router.add_post("/api/workout/log", api_workout_log_ex)
     app.router.add_post("/api/workout/log-text", api_workout_log_text)
     app.router.add_post("/api/workout/finish", api_workout_finish)
+    app.router.add_post("/api/workout/extra", api_workout_extra)
+    app.router.add_post("/api/workout/extra/cancel", api_workout_extra_cancel)
+    app.router.add_post("/api/workout/free", api_workout_free)
+    app.router.add_get("/api/workout/substitutions", api_workout_substitutions)
+    app.router.add_post("/api/workout/replace", api_workout_replace)
+    app.router.add_post("/api/workout/raise", api_workout_raise)
     app.router.add_post("/api/workout/generate", api_workout_generate)
     app.router.add_post("/api/workout/plan", api_workout_save_plan)
     app.router.add_post("/api/workout/parse-plan", api_workout_parse_plan)

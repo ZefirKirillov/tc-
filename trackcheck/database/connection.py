@@ -481,4 +481,18 @@ def init_db():
             FOREIGN KEY(session_id) REFERENCES ai_workout_sessions(id) ON DELETE CASCADE
         )
     ''')
+    # Разовые замены упражнений плана: что пользователь делал вместо
+    # original_name. План не меняется — таблица нужна только для подсказок.
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS exercise_substitutions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            original_name TEXT NOT NULL,
+            substitute_name TEXT NOT NULL,
+            sets INTEGER,
+            reps TEXT,
+            weight REAL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     db.commit()

@@ -39,3 +39,6 @@ class WorkoutSessionState(StatesGroup):
     entering_result = State()     # ввод текста результата
     skipping_day = State()        # ввод причины пропуска дня
     monthly_review = State()      # месячный пересмотр упражнений
+    free_logging = State()        # день отдыха: ввод тренировки текстом
+    replacing_exercise = State()  # разовая замена упражнения
+    raising_weight = State()      # цель выполнена — поднять вес?

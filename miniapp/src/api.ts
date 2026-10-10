@@ -140,6 +140,17 @@ export const api = {
     req('/api/workout/log-text', { method: 'POST', body: JSON.stringify({ session_id, exercise, text }) }),
   workoutFinish: (session_id: number) =>
     req('/api/workout/finish', { method: 'POST', body: JSON.stringify({ session_id }) }),
+  workoutExtra: (day: string) =>
+    req('/api/workout/extra', { method: 'POST', body: JSON.stringify({ day }) }),
+  workoutExtraCancel: () => req('/api/workout/extra/cancel', { method: 'POST', body: '{}' }),
+  workoutFree: (text: string) =>
+    req('/api/workout/free', { method: 'POST', body: JSON.stringify({ text }) }),
+  workoutSubs: (exercise: string) =>
+    req(`/api/workout/substitutions?exercise=${encodeURIComponent(exercise)}`),
+  workoutReplace: (session_id: number, exercise: any, replacement: { text: string } | { sub_id: number }) =>
+    req('/api/workout/replace', { method: 'POST', body: JSON.stringify({ session_id, exercise, ...replacement }) }),
+  workoutRaise: (target: any, increment: number) =>
+    req('/api/workout/raise', { method: 'POST', body: JSON.stringify({ target, increment }) }),
   workoutGenerate: (goal: string, level: string, days: number, notes = '') =>
     req('/api/workout/generate', { method: 'POST', body: JSON.stringify({ goal, level, days, notes }) }),
   workoutSavePlan: (plan: any, mode = 'ai', goal = '', level = '', days = 3) =>

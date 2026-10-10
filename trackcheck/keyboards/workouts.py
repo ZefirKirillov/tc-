@@ -175,10 +175,13 @@ def wp_edit_keyboard():
 
 
 
-def ws_today_keyboard():
+def ws_today_keyboard(extra: bool = False):
+    # extra — тренировка в день отдыха: пропускать нечего, можно отменить
+    second = (InlineKeyboardButton(text="Отменить", callback_data="ws_extra_cancel") if extra
+              else InlineKeyboardButton(text="Пропустил день", callback_data="ws_skip_day"))
     return InlineKeyboardMarkup(inline_keyboard=with_back_kb([
         [InlineKeyboardButton(text="ПОГНАЛИ 💪", callback_data="ws_start")],
-        [InlineKeyboardButton(text="Пропустил день", callback_data="ws_skip_day")]
+        [second]
     ]))
 
 
@@ -186,7 +189,8 @@ def ws_today_keyboard():
 def ws_exercise_keyboard(is_first: bool = True):
     buttons = [
         [InlineKeyboardButton(text="✅ Цель выполнена", callback_data="ws_ex_done")],
-        [InlineKeyboardButton(text="⏭ Пропустить", callback_data="ws_ex_skip")]
+        [InlineKeyboardButton(text="🔄 Заменить", callback_data="ws_ex_replace"),
+         InlineKeyboardButton(text="⏭ Пропустить", callback_data="ws_ex_skip")]
     ]
     if not is_first:
         buttons.append([InlineKeyboardButton(text="↩️ Предыдущее упражнение", callback_data="ws_ex_prev")])
@@ -201,6 +205,50 @@ def ws_skip_day_keyboard():
 
 def ws_rest_day_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[_back_button_row()])
+
+
+
+def ws_rest_day_actions_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=with_back_kb([
+        [InlineKeyboardButton(text="✍️ Записать тренировку", callback_data="ws_free_log")],
+        [InlineKeyboardButton(text="📋 Сделать день из плана", callback_data="ws_pick_day")],
+    ]))
+
+
+
+def ws_pick_day_keyboard(days: list):
+    """days: [(day_key, label)]"""
+    rows = [[InlineKeyboardButton(text=label, callback_data=f"ws_day_{key}")]
+            for key, label in days]
+    rows.append([InlineKeyboardButton(text="↩️ Назад", callback_data="ws_rest_back")])
+    return InlineKeyboardMarkup(inline_keyboard=with_back_kb(rows))
+
+
+
+def ws_free_log_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=with_back_kb([
+        [InlineKeyboardButton(text="↩️ Назад", callback_data="ws_rest_back")]
+    ]))
+
+
+
+def ws_replace_keyboard(suggestions: list):
+    """suggestions: [(sub_id, label)] — прошлые замены этого упражнения."""
+    rows = [[InlineKeyboardButton(text=label, callback_data=f"ws_sub_{sub_id}")]
+            for sub_id, label in suggestions]
+    rows.append([InlineKeyboardButton(text="↩️ К упражнению", callback_data="ws_sub_back")])
+    return InlineKeyboardMarkup(inline_keyboard=with_back_kb(rows))
+
+
+
+def ws_raise_weight_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=with_back_kb([
+        [InlineKeyboardButton(text="+1.25", callback_data="ws_raise_1.25"),
+         InlineKeyboardButton(text="+2.5", callback_data="ws_raise_2.5"),
+         InlineKeyboardButton(text="+5", callback_data="ws_raise_5")],
+        [InlineKeyboardButton(text="Своё значение", callback_data="ws_raise_custom"),
+         InlineKeyboardButton(text="Оставить", callback_data="ws_raise_keep")],
+    ]))
 
 
 

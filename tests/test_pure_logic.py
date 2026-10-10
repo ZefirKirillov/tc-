@@ -462,5 +462,63 @@ class TestSessionUniqueness(unittest.TestCase):
             ctx.close()
 
 
+
+class TestWeightGoal(unittest.TestCase):
+    def test_goal_met_exact_plan(self):
+        from trackcheck.services.workout_service import goal_met
+        ex = {"sets": 3, "reps": "8-10", "weight": 60}
+        self.assertTrue(goal_met(ex, {"sets_done": 3, "reps_done": "10", "weight_done": 60}))
+
+    def test_goal_not_met_bottom_of_range_or_bad_set(self):
+        from trackcheck.services.workout_service import goal_met
+        ex = {"sets": 3, "reps": "8-10", "weight": 60}
+        self.assertFalse(goal_met(ex, {"sets_done": 3, "reps_done": "8", "weight_done": 60}))
+        self.assertFalse(goal_met(ex, {"sets_done": 3, "reps_done": "10,10,7", "weight_done": 60}))
+        self.assertFalse(goal_met(ex, {"sets_done": 2, "reps_done": "10", "weight_done": 60}))
+        self.assertFalse(goal_met(ex, {"sets_done": 3, "reps_done": "10", "weight_done": 55}))
+
+    def test_missing_weight_done_means_planned_weight(self):
+        from trackcheck.services.workout_service import goal_met
+        ex = {"sets": 3, "reps": 10, "weight": 60}
+        self.assertTrue(goal_met(ex, {"sets_done": 3, "reps_done": "10", "weight_done": None}))
+
+    def test_bodyweight_never_asks(self):
+        from trackcheck.services.workout_service import goal_met
+        self.assertFalse(goal_met({"sets": 3, "reps": 10, "weight": None},
+                                  {"sets_done": 3, "reps_done": "12"}))
+
+    def test_raise_weight_all_occurrences_without_mutating(self):
+        from trackcheck.services.workout_service import raise_exercise_weight
+        plan = {"cycle_weeks": 2,
+                "week_1": {"monday": [{"exercise": "Жим лёжа", "weight": 60},
+                                      {"exercise": "Отжимания", "weight": None}]},
+                "week_2": {"thursday": [{"exercise": "жим лёжа", "weight": 50}]}}
+        new = raise_exercise_weight(plan, "Жим лёжа", 2.5)
+        self.assertEqual(new["week_1"]["monday"][0]["weight"], 62.5)
+        self.assertIsNone(new["week_1"]["monday"][1]["weight"])
+        self.assertEqual(new["week_2"]["thursday"][0]["weight"], 52.5)
+        self.assertEqual(plan["week_1"]["monday"][0]["weight"], 60)
+
+
+class TestExerciseSubstitutions(unittest.TestCase):
+    def test_last_three_distinct_newest_first(self):
+        ctx = _SessionDB(with_index=True)
+        try:
+            from trackcheck.database import repositories as repo
+            ctx.db.execute("""CREATE TABLE exercise_substitutions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
+                original_name TEXT NOT NULL, substitute_name TEXT NOT NULL,
+                sets INTEGER, reps TEXT, weight REAL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
+            for name, w in [("A", 10), ("B", 20), ("A", 12), ("C", 5), ("D", 7)]:
+                repo.add_exercise_substitution(1, "Жим лёжа", name, 3, 10, w)
+            repo.add_exercise_substitution(2, "Жим лёжа", "Z", 3, 10, 1)
+            subs = repo.get_exercise_substitutions(1, "жим лёжа")
+            self.assertEqual([s["substitute_name"] for s in subs], ["D", "C", "A"])
+            self.assertEqual(subs[2]["weight"], 12)
+        finally:
+            ctx.close()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,6 +16,8 @@ from trackcheck.web.api import (
     api_workout_save_plan, api_workout_parse_plan,
     api_workout_review, api_workout_apply_review,
     api_workout_history, api_ai_ask, api_ai_advice, api_ai_last,
+    api_workout_extra, api_workout_extra_cancel, api_workout_free,
+    api_workout_substitutions, api_workout_replace, api_workout_raise,
 )
 from trackcheck.web.static_serve import register_static
 
@@ -80,6 +82,12 @@ def create_web_app() -> web.Application:
     app.router.add_post("/api/workout/log", api_workout_log_ex)
     app.router.add_post("/api/workout/log-text", api_workout_log_text)
     app.router.add_post("/api/workout/finish", api_workout_finish)
+    app.router.add_post("/api/workout/extra", api_workout_extra)
+    app.router.add_post("/api/workout/extra/cancel", api_workout_extra_cancel)
+    app.router.add_post("/api/workout/free", api_workout_free)
+    app.router.add_get("/api/workout/substitutions", api_workout_substitutions)
+    app.router.add_post("/api/workout/replace", api_workout_replace)
+    app.router.add_post("/api/workout/raise", api_workout_raise)
     app.router.add_post("/api/workout/generate", api_workout_generate)
     app.router.add_post("/api/workout/plan", api_workout_save_plan)
     app.router.add_post("/api/workout/parse-plan", api_workout_parse_plan)
