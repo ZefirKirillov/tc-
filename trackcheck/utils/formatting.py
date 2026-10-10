@@ -114,3 +114,30 @@ def workouts_progress(workout_data: dict) -> str:
     count = data.get('current_count', 0) or 0
     goal = data.get('monthly_goal', 0) or 0
     return f"{count}/{goal}" if goal else str(count)
+
+
+
+def format_macros(protein, fat, carbs) -> str:
+    """«Б 35 · Ж 12 · У 50 г» — или пустая строка, если БЖУ неизвестны."""
+    if protein is None and fat is None and carbs is None:
+        return ""
+    return f"Б {round(protein or 0)} · Ж {round(fat or 0)} · У {round(carbs or 0)} г"
+
+
+
+MACRO_KEYS = ('protein', 'fat', 'carbs')
+
+
+def nutrition_macros(nutrition: dict) -> dict | None:
+    """БЖУ из оценки ИИ для хранения в FSM; None, если ИИ их не дал."""
+    if nutrition.get('protein') is None:
+        return None
+    return {k: nutrition[k] for k in MACRO_KEYS}
+
+
+def food_confirm_text(description: str, calories: float, macros: dict | None, approx: bool = False) -> str:
+    """Текст подтверждения блюда (текст, фото, «Мои блюда», повтор ИИ)."""
+    text = f"🍽 Ты съел: {description}\n🔢 Калории: {'~' if approx else ''}{int(calories)} ккал"
+    if macros:
+        text += f"\n🥩 БЖУ: {format_macros(macros['protein'], macros['fat'], macros['carbs'])}"
+    return text + "\n\nВсё верно?"

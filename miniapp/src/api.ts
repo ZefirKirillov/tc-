@@ -110,6 +110,14 @@ export function errText(e: unknown): string {
   return String((e as any)?.message ?? e)
 }
 
+/** Grams of protein / fat / carbs (БЖУ). */
+export type Macros = { protein: number; fat: number; carbs: number }
+
+/** Macros from an AI estimate, or null when the model gave calories only. */
+export function macrosOf(r: { protein?: number | null; fat?: number | null; carbs?: number | null }): Macros | null {
+  return r.protein == null || r.fat == null || r.carbs == null ? null : { protein: r.protein, fat: r.fat, carbs: r.carbs }
+}
+
 export const api = {
   me: () => req('/api/me'),
   ratings: () => req('/api/ratings'),
@@ -121,8 +129,8 @@ export const api = {
   doneTask: (id: number) => req(`/api/tasks/${id}/done`, { method: 'POST', body: '{}' }),
   deleteTask: (id: number) => req(`/api/tasks/${id}`, { method: 'DELETE' }),
   diet: () => req('/api/diet'),
-  logFood: (description: string, calories: number, meal = 'Еда') =>
-    req('/api/diet/log', { method: 'POST', body: JSON.stringify({ description, calories, meal }) }),
+  logFood: (description: string, calories: number, meal = 'Еда', macros: Macros | null = null) =>
+    req('/api/diet/log', { method: 'POST', body: JSON.stringify({ description, calories, meal, ...macros }) }),
   dietPhoto: (file: File) => reqPhoto('/api/diet/photo', file),
   dietEstimate: (description: string) =>
     req('/api/diet/estimate', { method: 'POST', body: JSON.stringify({ description }) }),

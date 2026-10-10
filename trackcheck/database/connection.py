@@ -298,6 +298,10 @@ def init_db():
     columns = [col[1] for col in cursor.fetchall()]
     if 'meal_type' not in columns:
         db.execute("ALTER TABLE diet_log ADD COLUMN meal_type TEXT DEFAULT 'Еда'")
+    # БЖУ (граммы). NULL — старые записи и ручной ввод без БЖУ.
+    for col_name in ('protein', 'fat', 'carbs'):
+        if col_name not in columns:
+            db.execute(f"ALTER TABLE diet_log ADD COLUMN {col_name} REAL DEFAULT NULL")
     db.execute('''
         CREATE TABLE IF NOT EXISTS exercise_categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -382,6 +386,11 @@ def init_db():
             UNIQUE(user_id, name)
         )
     ''')
+    cursor = db.execute("PRAGMA table_info(my_foods)")
+    columns = [col[1] for col in cursor.fetchall()]
+    for col_name in ('protein', 'fat', 'carbs'):
+        if col_name not in columns:
+            db.execute(f"ALTER TABLE my_foods ADD COLUMN {col_name} REAL DEFAULT NULL")
     # Таблицы для умных напоминаний
     db.execute('''
         CREATE TABLE IF NOT EXISTS reminders (

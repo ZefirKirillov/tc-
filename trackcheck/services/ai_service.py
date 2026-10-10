@@ -20,9 +20,9 @@ from trackcheck.database.repositories import (
     get_ratings, get_daily_ratings, get_today_ratings, get_yesterday_ratings,
     get_or_create_workout_data, get_or_create_rank_data, get_diet_profile,
     get_today_calories, get_today_food_log, get_last_weight, get_tasks_for_today,
-    get_user_name, db,
+    get_user_name, get_today_macros, get_macro_goals, db,
 )
-from trackcheck.utils.formatting import strip_markdown, workouts_progress
+from trackcheck.utils.formatting import format_macros, strip_markdown, workouts_progress
 
 
 # Atria Dawn (Shanghai AI Lab) — первичный провайдер для текста.
@@ -32,7 +32,7 @@ ATRIA_MODEL = os.environ.get("ATRIA_MODEL", "Atria-Dawn-Preview")
 # low — быстрее ответ; medium/high — дольше думает. Пусто — не передавать параметр.
 ATRIA_REASONING_EFFORT = os.environ.get("ATRIA_REASONING_EFFORT", "low").strip()
 # Рассуждения модели тратят тот же лимит токенов, поэтому короткие запросы
-# (ккал одним числом, max_tokens=100) иначе обрезаются до пустого ответа.
+# (ккал и БЖУ одной строкой, max_tokens=100) иначе обрезаются до пустого ответа.
 ATRIA_MIN_TOKENS = int(os.environ.get("ATRIA_MIN_TOKENS", "2048"))
 ATRIA_TIMEOUT = float(os.environ.get("ATRIA_TIMEOUT", "180"))
 
@@ -633,9 +633,9 @@ def check_advice_prompt(name: str, context: str) -> str:
 
 
 def food_calories_prompt(description: str) -> str:
-    return f"""Ты — точный счётчик калорий. Пользователь описывает что он съел (на русском или английском языке).
+    return f"""Ты — точный счётчик калорий и БЖУ. Пользователь описывает что он съел (на русском или английском языке).
 
-Твоя задача: посчитать ОБЩЕЕ количество ккал во всём описанном количестве еды.
+Твоя задача: посчитать ОБЩИЕ ккал, белки, жиры и углеводы во всём описанном количестве еды.
 
 ПРАВИЛА:
 - Если указано количество (2 бургера, 3 яйца, 200г) — умножай соответственно
@@ -644,29 +644,92 @@ def food_calories_prompt(description: str) -> str:
 - Не занижай: реальная еда жирнее и калорийнее чем кажется
 - Минимум для полноценного приёма пищи (обед/ужин): 350 ккал
 - Перекус может быть 100-300 ккал
+- БЖУ должны сходиться с ккал: белки×4 + жиры×9 + углеводы×4 ≈ ккал
 
-Ориентиры (на порцию):
-гречка с курицей = 450, паста карбонара = 680, бургер = 550, пицца (2 куска) = 600,
-борщ = 300, салат цезарь с курицей = 520, омлет 2 яйца = 200, овсянка на молоке = 280,
-рис с мясом = 500, шаурма = 650, хинкали 5шт = 400, суши-сет 8шт = 480,
-протеиновый коктейль = 150, кофе с молоком = 60, яблоко = 80, банан = 100
+Ориентиры (на порцию: ккал белки жиры углеводы):
+гречка с курицей = 450 35 12 50, паста карбонара = 680 25 30 75, бургер = 550 28 28 45,
+пицца (2 куска) = 600 25 22 75, борщ = 300 12 14 30, салат цезарь с курицей = 520 30 35 20,
+омлет 2 яйца = 200 14 15 2, овсянка на молоке = 280 10 8 42, рис с мясом = 500 28 15 62,
+шаурма = 650 30 32 60, суши-сет 8шт = 480 20 10 75, протеиновый коктейль = 150 25 2 8,
+кофе с молоком = 60 3 3 5, яблоко = 80 0 0 20, банан = 100 1 0 25
 
 Еда: {description}
 
-Ответь СТРОГО одним целым числом — суммарные килокалории. Никаких слов, никаких единиц:"""
+Ответь СТРОГО одной строкой из четырёх целых чисел через пробел: ккал белки жиры углеводы (граммы). Никаких слов и единиц. Пример: 450 35 12 50"""
 
 
-def estimate_food_calories(description: str) -> Optional[float]:
-    """Оценка ккал по текстовому описанию еды. None — ИИ не ответил или
-    ответ не похож на число ккал (вызывающий код предлагает повтор/ручной ввод)."""
+# Один промпт для фото еды в боте и Mini App (раньше был продублирован).
+FOOD_PHOTO_PROMPT = """Посмотри на фото еды и оцени калорийность и БЖУ.
+
+Ответь строго в формате: [название блюда] [ккал] [белки] [жиры] [углеводы]
+Название — 1-4 слова на русском. Числа — только целые, без единиц (БЖУ в граммах).
+
+Правила оценки:
+- Считай реальную порцию на фото, не занижай
+- Учитывай видимые соусы, масло, хлеб рядом
+- Если несколько блюд — суммируй всё
+- белки×4 + жиры×9 + углеводы×4 ≈ ккал
+
+Примеры правильных ответов:
+гречка с курицей 480 36 13 52
+паста карбонара 650 24 29 72
+омлет с сыром 350 22 27 3
+бургер и картошка 900 30 45 95
+салат цезарь 520 30 35 20"""
+
+
+def _parse_nutrition_numbers(nums: list) -> Optional[dict]:
+    """Числа из ответа ИИ → {calories, protein, fat, carbs}. Ждём «ккал Б Ж У»
+    в конце ответа; если БЖУ нет — старое поведение: ккал = последнее число,
+    БЖУ = None. Расходящиеся с ккал БЖУ масштабируются под ккал."""
+    if len(nums) >= 4:
+        kcal, protein, fat, carbs = nums[-4:]
+        if 50 <= kcal <= 5000 and max(protein, fat, carbs) <= 1000:
+            macro_kcal = protein * 4 + fat * 9 + carbs * 4
+            if macro_kcal <= 0:
+                return {"calories": kcal, "protein": None, "fat": None, "carbs": None}
+            # ИИ часто ошибается в сумме — доверяем ккал, сохраняем пропорции БЖУ
+            if abs(macro_kcal - kcal) / kcal > 0.2:
+                k = kcal / macro_kcal
+                protein, fat, carbs = protein * k, fat * k, carbs * k
+            return {"calories": kcal, "protein": round(protein, 1),
+                    "fat": round(fat, 1), "carbs": round(carbs, 1)}
+    valid = [n for n in nums if 50 <= n <= 5000]
+    if not valid:
+        return None
+    return {"calories": valid[-1], "protein": None, "fat": None, "carbs": None}
+
+
+def _numbers(text: str) -> list:
+    return [float(n.replace(",", ".")) for n in re.findall(r"\d+(?:[.,]\d+)?", text)]
+
+
+def parse_food_estimate(text: str) -> Optional[dict]:
+    """Ответ на food_calories_prompt → {calories, protein, fat, carbs} или None."""
+    if not text:
+        return None
+    return _parse_nutrition_numbers(_numbers(text))
+
+
+def parse_food_photo(text: str) -> tuple:
+    """Ответ на FOOD_PHOTO_PROMPT → (название, {calories, protein, fat, carbs} | None)."""
+    description = "Блюдо на фото"
+    match = re.search(r"^([^0-9]+?)(?:\s*\d|$)", text or "")
+    if match:
+        desc = match.group(1).strip(" .,;:-")
+        if 2 <= len(desc) <= 50:
+            description = desc
+    return description, _parse_nutrition_numbers(_numbers(text or ""))
+
+
+def estimate_food_nutrition(description: str) -> Optional[dict]:
+    """Оценка ккал и БЖУ по текстовому описанию еды → {calories, protein, fat, carbs}
+    (БЖУ могут быть None). None — ИИ не ответил или ответ не похож на ккал
+    (вызывающий код предлагает повтор/ручной ввод)."""
     if not _has_any_key():
         return None
     text = _generate_text(food_calories_prompt(description), 100, think_off=True)
-    if not text:
-        return None
-    numbers = [float(n) for n in re.findall(r"\b(\d{2,5})\b", text)
-               if 50 <= float(n) <= 9999]
-    return numbers[-1] if numbers else None
+    return parse_food_estimate(text)
 
 
 def analyze_food_photo(image_bytes: bytes, prompt: str) -> Optional[str]:
@@ -740,9 +803,15 @@ def get_full_context_for_ai(user_id: int) -> str:
         today_cal = get_today_calories(user_id)
         goal = profile.get('daily_calories') or 0
         lines.append(f"Диета: цель {int(goal)} ккал/день, съедено сегодня {int(today_cal)} ккал.")
+        macros, macro_goals = get_today_macros(user_id), get_macro_goals(user_id, profile)
+        lines.append("БЖУ сегодня / норма, г: " + ", ".join(
+            f"{label} {round(macros[k])}/{round(macro_goals[k])}"
+            for k, label in (('protein', 'белки'), ('fat', 'жиры'), ('carbs', 'углеводы'))))
         food_log = get_today_food_log(user_id)
         if food_log:
-            food_items = "; ".join(f"{meal}: {desc} ({int(cal)} ккал)" for meal, desc, cal in food_log)
+            food_items = "; ".join(
+                f"{meal}: {desc} ({int(cal)} ккал" + (f", {format_macros(p, f, c)})" if format_macros(p, f, c) else ")")
+                for meal, desc, cal, p, f, c in food_log)
             lines.append(f"Еда сегодня: {food_items}")
         last_weight = get_last_weight(user_id)
         if last_weight:

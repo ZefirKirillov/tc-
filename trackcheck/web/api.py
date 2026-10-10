@@ -4,6 +4,7 @@ All /api/* routes require Telegram initData auth (see auth.py).
 DB access goes through run_db() so Turso network calls never block the loop.
 """
 import json
+import math
 
 from aiohttp import web
 
@@ -26,6 +27,7 @@ RU_ERRORS = {
     "bad_repeat": "Дни повтора: числа 0–6 (Пн–Вс).",
     "bad_id": "Некорректный ID.",
     "bad_calories": "Калории — число больше нуля.",
+    "bad_macros": "БЖУ — числа от 0 до 1000 г.",
     "bad_session": "Тренировка не найдена. Начни заново.",
     "bad_action": "Неизвестное действие.",
     "bad_exercise": "Не получилось распознать упражнение.",
@@ -243,19 +245,23 @@ async def api_task_delete(request: web.Request):
 @require_user
 async def api_diet_get(request: web.Request):
     from trackcheck.database.repositories import (
-        get_diet_profile, get_today_calories, get_today_food_log,
+        get_diet_profile, get_today_calories, get_today_food_log, get_today_macros,
+        get_macro_goals,
     )
     user_id = request["tg_user"]["id"]
 
     def _load():
         profile = get_diet_profile(user_id)
         log = [
-            {"meal": r[0], "description": r[1], "calories": r[2]}
+            {"meal": r[0], "description": r[1], "calories": r[2],
+             "protein": r[3], "fat": r[4], "carbs": r[5]}
             for r in get_today_food_log(user_id)
         ]
         return {
             "profile": profile,
             "today_calories": get_today_calories(user_id),
+            "today_macros": get_today_macros(user_id),
+            "macro_goals": get_macro_goals(user_id, profile),
             "today_log": log,
         }
 
@@ -278,6 +284,15 @@ async def api_diet_log_post(request: web.Request):
         return web.json_response({"ok": False, "error": "bad_calories"}, status=400)
     if not description or not (0 < calories <= 10000):
         return web.json_response({"ok": False, "error": "bad_params"}, status=400)
+    # БЖУ необязательны: все три или ни одного
+    macros = {}
+    if any(body.get(k) is not None for k in ("protein", "fat", "carbs")):
+        try:
+            macros = {k: float(body.get(k)) for k in ("protein", "fat", "carbs")}
+        except (TypeError, ValueError):
+            return web.json_response({"ok": False, "error": "bad_macros"}, status=400)
+        if not all(math.isfinite(v) and 0 <= v <= 1000 for v in macros.values()):
+            return web.json_response({"ok": False, "error": "bad_macros"}, status=400)
     meal = (body.get("meal") or "Еда").strip()[:50]
 
     def _save():
@@ -285,7 +300,7 @@ async def api_diet_log_post(request: web.Request):
         from trackcheck.services.tracker_service import sync_diet_rating_for_today
         if not get_diet_profile(user_id):
             return None  # дневник питания работает только с заданной нормой калорий
-        save_food_log(user_id, meal, description, calories)
+        save_food_log(user_id, meal, description, calories, **macros)
         sync_diet_rating_for_today(user_id)
         return {"today_calories": _c(user_id)}
 
@@ -730,7 +745,6 @@ async def api_diet_profile_post(request: web.Request):
     (Mifflin–St Jeor × activity, goal adjustment with safety limits).
     {weight, height, age, gender: male|female, activity, goal: loss|maintain|gain,
      change?, days?, preview?: bool} → {daily_calories, warning, saved}"""
-    import math
     from trackcheck.database.repositories import (
         calculate_bmr, calculate_tdee, calculate_daily_calories, save_diet_profile,
     )
@@ -777,13 +791,19 @@ async def api_diet_profile_post(request: web.Request):
     return web.json_response({"ok": True, "data": data})
 
 
+def _nutrition_json(nutrition: dict) -> dict:
+    """AI estimate → JSON: whole kcal, macros rounded to grams (or null)."""
+    return {"calories": int(round(nutrition["calories"])),
+            **{k: None if nutrition[k] is None else round(nutrition[k])
+               for k in ("protein", "fat", "carbs")}}
+
+
 @require_user
 async def api_diet_photo(request: web.Request):
-    """Analyze food photo → {description, calories}. Does NOT log — client confirms first."""
+    """Analyze food photo → {description, calories, protein, fat, carbs}. Does NOT log — client confirms first."""
     import io
-    import re
     from trackcheck.utils.concurrency import run_in_thread
-    from trackcheck.services.ai_service import analyze_food_photo
+    from trackcheck.services.ai_service import analyze_food_photo, parse_food_photo, FOOD_PHOTO_PROMPT
     from trackcheck.database.repositories import get_diet_profile
     if not await run_db(get_diet_profile, request["tg_user"]["id"]):
         return _err("no_diet_profile")
@@ -811,43 +831,25 @@ async def api_diet_photo(request: web.Request):
         image_bytes = buf.getvalue()
     except Exception:
         pass  # send raw bytes; model layer will fail gracefully → ai_failed
-    prompt = (
-        "Посмотри на фото еды и оцени калорийность.\n\n"
-        "Ответь строго в формате: [название блюда] [число ккал]\n"
-        "Название — 1-4 слова на русском. Число — только целые ккал без единиц.\n\n"
-        "Правила оценки:\n"
-        "- Считай реальную порцию на фото, не занижай\n"
-        "- Учитывай видимые соусы, масло, хлеб рядом\n"
-        "- Если несколько блюд — суммируй всё\n\n"
-        "Примеры правильных ответов:\n"
-        "гречка с курицей 480\nпаста карбонара 650\nсалат цезарь 520"
-    )
-    text = await run_in_thread(analyze_food_photo, image_bytes, prompt)
+    text = await run_in_thread(analyze_food_photo, image_bytes, FOOD_PHOTO_PROMPT)
     if text is None:
         return _err("ai_failed", 502)
-    description, calories = "Блюдо на фото", None
-    nums = re.findall(r"\b(\d{2,5})\b", text)
-    valid = [float(n) for n in nums if 50 <= float(n) <= 9999]
-    if valid:
-        calories = valid[-1]
-    match = re.search(r"^([^0-9]+?)(?:\s*\d|$)", text)
-    if match:
-        desc = match.group(1).strip(" .,;:-")
-        if 2 <= len(desc) <= 50:
-            description = desc
-    if calories is None or not (0 < calories <= 5000):
+    description, nutrition = parse_food_photo(text)
+    if nutrition is None:
         return web.json_response({"ok": True, "data": {
-            "description": description, "calories": None, "needs_manual": True, "raw": text[:200]}})
+            "description": description, "calories": None, "protein": None, "fat": None, "carbs": None,
+            "needs_manual": True, "raw": text[:200]}})
     return web.json_response({"ok": True, "data": {
-        "description": description, "calories": int(calories), "needs_manual": False}})
+        "description": description, **_nutrition_json(nutrition), "needs_manual": False}})
 
 
 
 @require_user
 async def api_diet_estimate(request: web.Request):
-    """Estimate calories from a short text description → {calories}. Does NOT log."""
+    """Estimate calories and macros from a short text description → {calories, protein, fat, carbs}.
+    Macros may be null. Does NOT log."""
     from trackcheck.utils.concurrency import run_in_thread
-    from trackcheck.services.ai_service import estimate_food_calories
+    from trackcheck.services.ai_service import estimate_food_nutrition
     from trackcheck.database.repositories import get_diet_profile
     if not await run_db(get_diet_profile, request["tg_user"]["id"]):
         return _err("no_diet_profile")
@@ -858,10 +860,10 @@ async def api_diet_estimate(request: web.Request):
     description = (body.get("description") or "").strip()[:300]
     if len(description) < 3:
         return _err("too_short")
-    calories = await run_in_thread(estimate_food_calories, description)
-    if calories is None or not (0 < calories <= 5000):
+    nutrition = await run_in_thread(estimate_food_nutrition, description)
+    if nutrition is None:
         return _err("no_estimate", 502)
-    return web.json_response({"ok": True, "data": {"calories": int(round(calories))}})
+    return web.json_response({"ok": True, "data": _nutrition_json(nutrition)})
 
 @require_user
 async def api_workout_parse_plan(request: web.Request):

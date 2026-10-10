@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, keep, peek } from './api'
+import { api, keep, macrosOf, peek, type Macros } from './api'
 import { Ico } from './icons'
 import MainAction from './MainAction'
 import { haptic, type MainCfg } from './tg'
@@ -15,17 +15,26 @@ function num(s: string): number {
   return parseFloat(s.replace(',', '.'))
 }
 
+const MACROS: Array<[keyof Macros, string]> = [['protein', 'Белки'], ['fat', 'Жиры'], ['carbs', 'Углеводы']]
+
+/** «Б 35 · Ж 12 · У 50 г» */
+function macroLine(m: Macros): string {
+  return `Б ${fmt(Math.round(m.protein))} · Ж ${fmt(Math.round(m.fat))} · У ${fmt(Math.round(m.carbs))} г`
+}
+
 export default function Diet() {
   const b = useBanner()
   const [data, setData] = useState<any>(() => peek('diet') ?? null)
   const [loadErr, setLoadErr] = useState<unknown>(null)
   const [desc, setDesc] = useState('')
   const [cal, setCal] = useState('')
+  // БЖУ from the last AI estimate; dropped once the description changes.
+  const [macros, setMacros] = useState<Macros | null>(null)
   const [meal, setMeal] = useState('Еда')
   const [busy, setBusy] = useState(false)
   const [photoBusy, setPhotoBusy] = useState(false)
   const [estBusy, setEstBusy] = useState(false)
-  const [photoPrev, setPhotoPrev] = useState<{ url: string; description: string; calories: number | null } | null>(null)
+  const [photoPrev, setPhotoPrev] = useState<{ url: string; description: string; calories: number | null; macros: Macros | null } | null>(null)
   const [manualCal, setManualCal] = useState('')
   const [body, setBody] = useState<any>(() => peek('body') ?? null)
   const [weight, setWeight] = useState('')
@@ -54,8 +63,8 @@ export default function Diet() {
     if (!desc.trim() || !(calories > 0)) { b.setErr('Опиши блюдо и укажи калории.'); return }
     setBusy(true)
     try {
-      await api.logFood(desc.trim(), calories, meal)
-      setDesc(''); setCal('')
+      await api.logFood(desc.trim(), calories, meal, macros)
+      setDesc(''); setCal(''); setMacros(null)
       setAdding(false)
       b.setOk('Записано.')
       await load()
@@ -63,7 +72,7 @@ export default function Diet() {
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
-  // AI fills the calorie field from the description; the user can still edit it.
+  // AI fills the calorie field (and БЖУ) from the description; the user can still edit calories.
   async function estimate() {
     if (desc.trim().length < 3) { b.setErr('Опиши блюдо чуть подробнее.'); return }
     setEstBusy(true)
@@ -71,6 +80,7 @@ export default function Diet() {
     try {
       const r = await api.dietEstimate(desc.trim())
       setCal(String(r.calories))
+      setMacros(macrosOf(r))
       haptic()
     } catch (e) { b.setErr(e) } finally { setEstBusy(false) }
   }
@@ -82,7 +92,7 @@ export default function Diet() {
     b.clear()
     try {
       const r = await api.dietPhoto(file)
-      setPhotoPrev({ url: URL.createObjectURL(file), description: r.description, calories: r.calories })
+      setPhotoPrev({ url: URL.createObjectURL(file), description: r.description, calories: r.calories, macros: macrosOf(r) })
       haptic()
       if (r.needs_manual) b.setErr('Блюдо распознано, но калории оценить не удалось — введи вручную.')
     } catch (e) { b.setErr(e) } finally {
@@ -97,7 +107,7 @@ export default function Diet() {
     if (!(calories > 0)) { b.setErr('Укажи калории числом.'); return }
     setBusy(true)
     try {
-      await api.logFood(photoPrev.description, calories, meal)
+      await api.logFood(photoPrev.description, calories, meal, photoPrev.calories != null ? photoPrev.macros : null)
       setPhotoPrev(null); setManualCal('')
       setAdding(false)
       b.setOk('Записано.')
@@ -131,6 +141,7 @@ export default function Diet() {
 
   function closeAdd() {
     setAdding(false)
+    setMacros(null)
     setPhotoPrev(null)
     setManualCal('')
   }
@@ -147,6 +158,8 @@ export default function Diet() {
   const eaten = Math.round(data.today_calories ?? 0)
   const left = Math.round(goal - eaten)
   const entries: any[] = data.today_log ?? []
+  const eatenMacros: Macros = data.today_macros ?? { protein: 0, fat: 0, carbs: 0 }
+  const macroGoals: Macros | null = data.macro_goals ?? null
 
   const sheetOpen = adding || bodyOpen
 
@@ -165,6 +178,19 @@ export default function Diet() {
           {fmt(eaten)}<span className="muted" style={{ fontSize: 15 }}> / {fmt(Math.round(goal))} ккал</span>
         </div>
         <Meter value={eaten} max={goal} tone={eaten > goal ? 'over' : undefined} />
+        {macroGoals && (
+          <div className="hstack" style={{ gap: 12, marginTop: 12, alignItems: 'flex-start' }}>
+            {MACROS.map(([k, label]) => (
+              <div key={k} className="grow" style={{ minWidth: 0, flexBasis: 0 }}>
+                <div className="row-meta clip" style={{ marginTop: 0 }}>{label}</div>
+                <div className="num clip" style={{ fontSize: 13, margin: '2px 0 4px' }}>
+                  {fmt(Math.round(eatenMacros[k]))}<span className="muted"> / {fmt(Math.round(macroGoals[k]))} г</span>
+                </div>
+                <Meter value={eatenMacros[k]} max={macroGoals[k]} tone={eatenMacros[k] > macroGoals[k] * 1.1 ? 'over' : undefined} />
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {!sheetOpen && <MainAction cfg={main} float />}
@@ -179,6 +205,7 @@ export default function Diet() {
                   <div className="grow wrap">
                     <div className="label">{e.meal}</div>
                     <div>{e.description}</div>
+                    {macrosOf(e) && <div className="row-meta num">{macroLine(macrosOf(e)!)}</div>}
                   </div>
                   <span className="num" style={{ flex: 'none' }}>{fmt(Math.round(e.calories))}</span>
                 </div>
@@ -209,10 +236,10 @@ export default function Diet() {
           <Seg value={meal} options={MEALS} onChange={setMeal} label="Приём пищи" />
           {!photoPrev ? (
             <>
-              <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Что съел? Например, овсянка 100 г"
+              <input value={desc} onChange={(e) => { setDesc(e.target.value); setMacros(null) }} placeholder="Что съел? Например, овсянка 100 г"
                 className="field mt" maxLength={300} />
               <button onClick={estimate} disabled={estBusy || desc.trim().length < 3} className="btn btn-ghost mt" style={{ minHeight: 44, width: '100%' }}>
-                {estBusy ? <><Spinner fallback={<Ico.spark size={18} />} /> Check считает калории…</> : <><Ico.spark size={18} /> Check, Посчитай калории</>}
+                {estBusy ? <><Spinner fallback={<Ico.spark size={18} />} /> Check считает калории и БЖУ…</> : <><Ico.spark size={18} /> Check, Посчитай калории и БЖУ</>}
               </button>
               <div className="field-row mt">
                 <input value={cal} onChange={(e) => setCal(e.target.value)} placeholder="Ккал" inputMode="decimal"
@@ -224,6 +251,7 @@ export default function Diet() {
                   {photoBusy ? <><Spinner fallback={<Ico.camera size={18} />} /> Смотрю на фото…</> : <><Ico.camera size={18} /> По фото</>}
                 </button>
               </div>
+              {macros && <div className="row-meta num" style={{ marginTop: 6 }}>{macroLine(macros)}</div>}
             </>
           ) : (
             <div className="mt">
@@ -232,6 +260,7 @@ export default function Diet() {
                 <span className="wrap grow">{photoPrev.description}</span>
                 {photoPrev.calories != null && <span className="num accent" style={{ flex: 'none' }}>~{fmt(photoPrev.calories)} ккал</span>}
               </div>
+              {photoPrev.calories != null && photoPrev.macros && <div className="row-meta num">{macroLine(photoPrev.macros)}</div>}
               {photoPrev.calories == null && (
                 <input value={manualCal} onChange={(e) => setManualCal(e.target.value)}
                   placeholder="Калории вручную" inputMode="decimal" className="field field-num mt" />

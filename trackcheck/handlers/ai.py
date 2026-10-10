@@ -1,7 +1,6 @@
 import asyncio
 import html
 import os
-import re
 
 from aiogram import Bot, F
 from aiogram.enums import ChatAction
@@ -21,13 +20,14 @@ from trackcheck.services.ai_service import (
     gemini_generate, gemini_generate_rating, gemini_generate_plan,
     gemini_parse_manual_plan, _fallback_parse_plan,
     gemini_monthly_review, get_full_context_for_ai, analyze_low_rating,
-    analyze_food_photo, analyze_body_photo, estimate_food_calories, stream_answer,
+    analyze_food_photo, analyze_body_photo, estimate_food_nutrition, parse_food_photo, stream_answer,
     check_question_prompt, check_advice_prompt,
 )
 from trackcheck.services.workout_service import _format_full_plan
 from trackcheck.utils.concurrency import run_in_thread, run_db
 from trackcheck.utils.dates import user_today_str
 from trackcheck.utils.bot_helpers import delete_message_safe, delete_temp_messages
+from trackcheck.utils.formatting import food_confirm_text, nutrition_macros
 from trackcheck.keyboards.common import retry_ai_keyboard
 from trackcheck.keyboards.ai import ai_reply_keyboard, photo_analysis_back_keyboard
 from trackcheck.keyboards.categories import reflection_keyboard
@@ -284,8 +284,8 @@ async def _retry_food_calories(callback, bot, state):
     description = data.get("retry_food_description", "")
     user_id = callback.from_user.id
     await bot.send_chat_action(callback.message.chat.id, action=ChatAction.TYPING)
-    calories = await run_in_thread(estimate_food_calories, description)
-    if calories is None or calories <= 0:
+    nutrition = await run_in_thread(estimate_food_nutrition, description)
+    if nutrition is None:
         # ИИ снова не смог — оставляем кнопку повтора, не заставляя вводить руками
         await callback.message.edit_text(
             f"❌ Не удалось определить калории для «{description}». "
@@ -293,10 +293,11 @@ async def _retry_food_calories(callback, bot, state):
             reply_markup=retry_ai_keyboard("food_calories")
         )
         return
-    await state.update_data(food_description=description, food_calories=calories)
+    macros = nutrition_macros(nutrition)
+    await state.update_data(food_description=description, food_calories=nutrition['calories'], food_macros=macros)
     await state.set_state(DietState.food_confirm)
     await callback.message.edit_text(
-        f"🍽 Ты съел: {description}\n🔢 Калории: {int(calories)} ккал\n\nВсё верно?",
+        food_confirm_text(description, nutrition['calories'], macros),
         reply_markup=diet_confirm_food_keyboard()
     )
 
@@ -349,18 +350,8 @@ async def _retry_food_photo(callback, bot, state):
             reply_markup=retry_ai_keyboard("food_photo")
         )
         return
-    description = "Блюдо на фото"
-    calories = None
-    nums = re.findall(r"\b(\d{2,5})\b", text)
-    valid_nums = [float(n) for n in nums if 50 <= float(n) <= 9999]
-    if valid_nums:
-        calories = valid_nums[-1]
-    match = re.search(r"^([^0-9]+?)(?:\s*\d|$)", text)
-    if match:
-        desc = match.group(1).strip(" .,;:-")
-        if 2 <= len(desc) <= 50:
-            description = desc
-    if calories is None or calories <= 0 or calories > 5000:
+    description, nutrition = parse_food_photo(text)
+    if nutrition is None:
         await callback.message.edit_text(
             f"🍽 Определено: {description}\n"
             "❌ Не удалось оценить калории.\n\n"
@@ -368,10 +359,11 @@ async def _retry_food_photo(callback, bot, state):
             reply_markup=retry_ai_keyboard("food_photo")
         )
         return
-    await state.update_data(food_description=description, food_calories=calories)
+    macros = nutrition_macros(nutrition)
+    await state.update_data(food_description=description, food_calories=nutrition['calories'], food_macros=macros)
     await state.set_state(DietState.food_confirm)
     await callback.message.edit_text(
-        f"🍽 Ты съел: {description}\n🔢 Калории: ~{int(calories)} ккал\n\nВсё верно?",
+        food_confirm_text(description, nutrition['calories'], macros, approx=True),
         reply_markup=diet_confirm_food_keyboard()
     )
 

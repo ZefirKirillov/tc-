@@ -418,12 +418,14 @@ def get_diet_profile(user_id: int) -> Optional[dict]:
 
 
 
-def save_food_log(user_id: int, meal_type: str, description: str, calories: float):
+def save_food_log(user_id: int, meal_type: str, description: str, calories: float,
+                  protein: Optional[float] = None, fat: Optional[float] = None,
+                  carbs: Optional[float] = None):
     today = user_today_str(user_id)
     db.execute('''
-        INSERT INTO diet_log (user_id, date, meal_type, food_description, calories)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (user_id, today, meal_type, description, calories))
+        INSERT INTO diet_log (user_id, date, meal_type, food_description, calories, protein, fat, carbs)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (user_id, today, meal_type, description, calories, protein, fat, carbs))
     db.commit()
 
 
@@ -436,10 +438,22 @@ def get_today_calories(user_id: int) -> float:
 
 
 
-def get_today_food_log(user_id: int) -> list:
+def get_today_macros(user_id: int) -> dict:
+    """Сумма БЖУ за сегодня в граммах (записи без БЖУ не учитываются)."""
     today = user_today_str(user_id)
     cursor = db.execute('''
-        SELECT meal_type, food_description, calories FROM diet_log
+        SELECT SUM(protein), SUM(fat), SUM(carbs) FROM diet_log WHERE user_id = ? AND date = ?
+    ''', (user_id, today))
+    row = cursor.fetchone()
+    return {'protein': row[0] or 0.0, 'fat': row[1] or 0.0, 'carbs': row[2] or 0.0}
+
+
+
+def get_today_food_log(user_id: int) -> list:
+    """Строки (meal_type, description, calories, protein, fat, carbs) за сегодня."""
+    today = user_today_str(user_id)
+    cursor = db.execute('''
+        SELECT meal_type, food_description, calories, protein, fat, carbs FROM diet_log
         WHERE user_id = ? AND date = ?
         ORDER BY timestamp
     ''', (user_id, today))
@@ -480,9 +494,11 @@ def _is_unique_violation(exc: BaseException) -> bool:
     return "UNIQUE" in msg and "CONSTRAINT" in msg
 
 
-def add_my_food(user_id: int, name: str, calories: float):
+def add_my_food(user_id: int, name: str, calories: float, protein: Optional[float] = None,
+                fat: Optional[float] = None, carbs: Optional[float] = None):
     try:
-        db.execute('INSERT INTO my_foods (user_id, name, calories) VALUES (?, ?, ?)', (user_id, name, calories))
+        db.execute('INSERT INTO my_foods (user_id, name, calories, protein, fat, carbs) VALUES (?, ?, ?, ?, ?, ?)',
+                   (user_id, name, calories, protein, fat, carbs))
         db.commit()
     except Exception as e:
         if not _is_unique_violation(e):
@@ -543,6 +559,25 @@ def calculate_daily_calories(tdee: float, goal_type: str, target_weight_change: 
         calories = min_calories
         warning = f"⚠️ Рассчитанная норма слишком низкая. Установлен безопасный минимум {min_calories} ккал/день. Рекомендуется пересмотреть цель."
     return calories, warning
+
+
+
+# Белки на кг веса по цели: при похудении больше, чтобы сохранить мышцы.
+_PROTEIN_PER_KG = {'loss': 2.0, 'gain': 1.8, 'maintain': 1.6}
+
+
+def calculate_macro_goals(daily_calories: float, weight: Optional[float], goal_type: Optional[str]) -> dict:
+    """Дневная норма БЖУ в граммах из нормы ккал: белки по весу (не больше 35% ккал),
+    жиры 25% ккал, углеводы — остаток."""
+    if not daily_calories or daily_calories <= 0:
+        return {'protein': 0.0, 'fat': 0.0, 'carbs': 0.0}
+    protein = (weight or 0) * _PROTEIN_PER_KG.get(goal_type or 'maintain', 1.6)
+    if protein <= 0:
+        protein = daily_calories * 0.25 / 4
+    protein = min(protein, daily_calories * 0.35 / 4)
+    fat = daily_calories * 0.25 / 9
+    carbs = max(0.0, (daily_calories - protein * 4 - fat * 9) / 4)
+    return {'protein': round(protein), 'fat': round(fat), 'carbs': round(carbs)}
 
 
 
@@ -986,3 +1021,12 @@ def get_weekly_workout_progress(user_id: int) -> tuple:
     row = cursor.fetchone()
     done = row[0] if row else 0
     return done, days_per_week
+
+
+
+def get_macro_goals(user_id: int, profile: Optional[dict]) -> dict:
+    """Норма БЖУ пользователя: по последнему записанному весу, иначе по весу из профиля."""
+    if not profile:
+        return {'protein': 0.0, 'fat': 0.0, 'carbs': 0.0}
+    weight = get_last_weight(user_id) or profile.get('weight')
+    return calculate_macro_goals(profile.get('daily_calories') or 0, weight, profile.get('goal_type'))

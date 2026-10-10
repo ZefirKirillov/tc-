@@ -2,7 +2,6 @@ import asyncio
 import io
 import math
 import os
-import re
 from datetime import datetime
 
 from aiogram import Bot, F
@@ -16,14 +15,19 @@ from trackcheck.database.connection import db
 from trackcheck.database.repositories import (
     get_diet_profile, save_diet_profile, get_today_calories, get_today_food_log,
     save_food_log, save_weight_log, get_last_weight, save_body_fat, add_my_food,
-    calculate_bmr, calculate_tdee, calculate_daily_calories,
+    calculate_bmr, calculate_tdee, calculate_daily_calories, get_today_macros,
+    get_macro_goals,
 )
 from trackcheck.states.food import DietState
-from trackcheck.services.ai_service import analyze_food_photo, estimate_food_calories
+from trackcheck.services.ai_service import (
+    analyze_food_photo, estimate_food_nutrition, parse_food_photo, FOOD_PHOTO_PROMPT,
+)
 from trackcheck.services.tracker_service import sync_diet_rating_for_today
 from trackcheck.services.chart_service import build_diet_chart
 from trackcheck.utils.concurrency import run_in_thread
-from trackcheck.utils.formatting import create_new_progress_bar
+from trackcheck.utils.formatting import (
+    MACRO_KEYS, create_new_progress_bar, food_confirm_text, format_macros, nutrition_macros,
+)
 from trackcheck.utils.bot_helpers import (
     delete_message_safe, delete_temp_messages, delete_message_after_delay,
 )
@@ -39,6 +43,34 @@ from trackcheck.keyboards.food import (
 from trackcheck.runtime import (user_temp_messages, user_last_menu,
                                 user_food_history_page, nav_push)
 from trackcheck.handlers import router
+
+
+def _logged_text(calories: float, macros: dict | None) -> str:
+    text = f"✅ Записано: {int(calories)} ккал"
+    if macros:
+        text += f" ({format_macros(macros['protein'], macros['fat'], macros['carbs'])})"
+    return text
+
+
+def _parse_manual_nutrition(text: str):
+    """«350» или «350 20 10 40» (ккал Б Ж У) → (ккал, БЖУ | None). ValueError при ошибке."""
+    parts = (text or "").replace(',', '.').split()
+    if len(parts) not in (1, 4):
+        raise ValueError
+    values = [float(p) for p in parts]
+    if not all(math.isfinite(v) for v in values):
+        raise ValueError
+    calories = values[0]
+    if calories <= 0 or calories > 10000:
+        raise ValueError
+    if len(values) == 1:
+        return calories, None
+    if any(v < 0 or v > 1000 for v in values[1:]):
+        raise ValueError
+    return calories, dict(zip(MACRO_KEYS, values[1:]))
+
+
+MANUAL_NUTRITION_HINT = "Можно сразу с БЖУ через пробел: ккал белки жиры углеводы, например 350 20 10 40."
 
 
 @router.callback_query(F.data == "menu_diet")
@@ -74,10 +106,18 @@ async def show_diet_menu(user_id: int, chat_id: int, bot: Bot):
     percent = (today_cal / daily_goal * 100) if daily_goal > 0 else 0
     bar = create_new_progress_bar(int(percent//10), 10)
 
+    macros = get_today_macros(user_id)
+    macro_goals = get_macro_goals(user_id, profile)
+    macro_line = " · ".join(
+        f"{label} {round(macros[k])}/{round(macro_goals[k])}"
+        for k, label in zip(MACRO_KEYS, ("Б", "Ж", "У"))
+    ) + " г"
+
     food_log = get_today_food_log(user_id)
     food_lines = []
-    for meal_type, desc, cal in food_log:
-        food_lines.append(f"{meal_type}: {desc} ({int(cal)} ккал)")
+    for meal_type, desc, cal, p, f, c in food_log:
+        macro_str = format_macros(p, f, c)
+        food_lines.append(f"{meal_type}: {desc} ({int(cal)} ккал{', ' + macro_str if macro_str else ''})")
 
     food_summary = "\n".join(food_lines) if food_lines else "Пока нет записей."
 
@@ -86,6 +126,7 @@ async def show_diet_menu(user_id: int, chat_id: int, bot: Bot):
 Цель: {int(daily_goal)} ккал/день
 Съедено сегодня: {int(today_cal)} ккал ({int(percent)}%)
 {bar} {int(percent)}%
+БЖУ: {macro_line}
 
 Сегодня:
 {food_summary}
@@ -141,7 +182,7 @@ async def diet_choose_meal(callback: CallbackQuery, bot: Bot, state: FSMContext)
 
     msg = await callback.message.answer(
         f"Приём пищи: <b>{meal_type}</b>\n\n"
-        "Опиши что съел — ИИ посчитает калории, или запиши вручную:",
+        "Опиши что съел — ИИ посчитает калории и БЖУ, или запиши вручную:",
         parse_mode="HTML",
         reply_markup=meal_chosen_keyboard()
     )
@@ -158,7 +199,7 @@ async def meal_entry_manual(callback: CallbackQuery, bot: Bot, state: FSMContext
     await state.update_data(food_description='')
     await state.set_state(DietState.manual_calories)
     msg = await callback.message.answer(
-        "✏️ Введи количество калорий (только число):",
+        f"✏️ Введи количество калорий (число).\n{MANUAL_NUTRITION_HINT}",
         reply_markup=food_cancel_keyboard()
     )
     user_temp_messages.setdefault(user_id, {})['diet_temp'] = msg.message_id
@@ -198,14 +239,16 @@ async def diet_choose_my_food(callback: CallbackQuery, bot: Bot, state: FSMConte
     food_name = callback.data.split("_", 2)[2]
     user_id = callback.from_user.id
 
-    cursor = db.execute('SELECT calories FROM my_foods WHERE user_id = ? AND name = ?', (user_id, food_name))
+    cursor = db.execute('SELECT calories, protein, fat, carbs FROM my_foods WHERE user_id = ? AND name = ?',
+                        (user_id, food_name))
     row = cursor.fetchone()
     if row:
         calories = row[0]
-        await state.update_data(food_description=food_name, food_calories=calories)
+        macros = None if row[1] is None else dict(zip(MACRO_KEYS, (row[1], row[2], row[3])))
+        await state.update_data(food_description=food_name, food_calories=calories, food_macros=macros)
         await callback.message.delete()
         await state.set_state(DietState.food_confirm)
-        text = f"🍽 Ты съел: {food_name}\n🔢 Калории: {int(calories)} ккал\n\nВсё верно?"
+        text = food_confirm_text(food_name, calories, macros)
         await callback.message.answer(text, reply_markup=diet_confirm_food_keyboard())
     else:
         await callback.answer("❌ Блюдо не найдено", show_alert=True)
@@ -260,22 +303,7 @@ async def process_food_photo(message: Message, bot: Bot, state: FSMContext):
     image.save(img_buffer, format='PNG')
     image_bytes = img_buffer.getvalue()
 
-    prompt = """Посмотри на фото еды и оцени калорийность.
-
-    Ответь строго в формате: [название блюда] [число ккал]
-    Название — 1-4 слова на русском. Число — только целые ккал без единиц.
-
-    Правила оценки:
-    - Считай реальную порцию на фото, не занижай
-    - Учитывай видимые соусы, масло, хлеб рядом
-    - Если несколько блюд — суммируй всё
-
-    Примеры правильных ответов:
-    гречка с курицей 480
-    паста карбонара 650
-    омлет с сыром 350
-    бургер и картошка 900
-    салат цезарь 520"""
+    prompt = FOOD_PHOTO_PROMPT
     # Сохраняем данные для повтора без повторной загрузки фото
     await state.update_data(
         retry_food_photo_bytes=image_bytes,
@@ -290,33 +318,25 @@ async def process_food_photo(message: Message, bot: Bot, state: FSMContext):
         )
         return
 
-    description = "Блюдо на фото"
-    calories = None
-    nums = re.findall(r"\b(\d{2,5})\b", text)
-    valid_nums = [float(n) for n in nums if 50 <= float(n) <= 9999]
-    if valid_nums:
-        calories = valid_nums[-1]  # берём последнее число — обычно итоговые ккал
-    match = re.search(r"^([^0-9]+?)(?:\s*\d|$)", text)
-    if match:
-        desc = match.group(1).strip(" .,;:-")
-        if 2 <= len(desc) <= 50:
-            description = desc
+    description, nutrition = parse_food_photo(text)
 
     await delete_message_safe(bot, chat_id, wait_msg.message_id)
-    if calories is None or calories <= 0 or calories > 5000:
+    if nutrition is None:
         await state.update_data(food_description=description)
         await state.set_state(DietState.manual_calories)
         msg = await message.answer(
-            f"🍽 Определено: {description}\n❌ Не удалось оценить калории. Введи вручную (число):",
+            f"🍽 Определено: {description}\n❌ Не удалось оценить калории. Введи вручную (число).\n"
+            f"{MANUAL_NUTRITION_HINT}",
             reply_markup=food_cancel_keyboard()
         )
         user_temp_messages.setdefault(user_id, {})['diet_temp'] = msg.message_id
         return
 
-    await state.update_data(food_description=description, food_calories=calories)
+    macros = nutrition_macros(nutrition)
+    await state.update_data(food_description=description, food_calories=nutrition['calories'], food_macros=macros)
     await state.set_state(DietState.food_confirm)
     await message.answer(
-        f"🍽 Ты съел: {description}\n🔢 Калории: ~{int(calories)} ккал\n\nВсё верно?",
+        food_confirm_text(description, nutrition['calories'], macros, approx=True),
         reply_markup=diet_confirm_food_keyboard()
     )
 
@@ -345,9 +365,9 @@ async def process_food_description(message: Message, bot: Bot, state: FSMContext
 
     await bot.send_chat_action(message.chat.id, action=ChatAction.TYPING)
     await state.update_data(retry_food_description=description, retry_action="food_calories")
-    calories = await run_in_thread(estimate_food_calories, description)
+    nutrition = await run_in_thread(estimate_food_nutrition, description)
 
-    if calories is None or calories <= 0:
+    if nutrition is None:
         await state.update_data(food_description=description)
         await state.set_state(DietState.manual_calories)
         msg = await message.answer(
@@ -357,9 +377,10 @@ async def process_food_description(message: Message, bot: Bot, state: FSMContext
         user_temp_messages.setdefault(user_id, {})['diet_temp'] = msg.message_id
         return
 
-    await state.update_data(food_description=description, food_calories=calories)
+    macros = nutrition_macros(nutrition)
+    await state.update_data(food_description=description, food_calories=nutrition['calories'], food_macros=macros)
     await state.set_state(DietState.food_confirm)
-    text = f"🍽 Ты съел: {description}\n🔢 Калории: {int(calories)} ккал\n\nВсё верно?"
+    text = food_confirm_text(description, nutrition['calories'], macros)
     await message.answer(text, reply_markup=diet_confirm_food_keyboard())
 
 
@@ -372,11 +393,12 @@ async def food_confirm_yes(callback: CallbackQuery, bot: Bot, state: FSMContext)
     meal_type = data.get('meal_type')
     description = data.get('food_description')
     calories = data.get('food_calories')
+    macros = data.get('food_macros')
     user_id = callback.from_user.id
-    save_food_log(user_id, meal_type, description, calories)
+    save_food_log(user_id, meal_type, description, calories, **(macros or {}))
     asyncio.create_task(run_in_thread(sync_diet_rating_for_today, user_id))
 
-    success_msg = await callback.message.answer(f"✅ Записано: {int(calories)} ккал.")
+    success_msg = await callback.message.answer(_logged_text(calories, macros) + ".")
     await asyncio.sleep(2)
     await delete_message_safe(bot, callback.message.chat.id, success_msg.message_id)
 
@@ -418,7 +440,7 @@ async def food_confirm_manual(callback: CallbackQuery, bot: Bot, state: FSMConte
     await state.set_state(DietState.manual_calories)
     chat_id = callback.message.chat.id
     await callback.message.edit_reply_markup(reply_markup=None)
-    msg = await bot.send_message(chat_id, "✏️ Введи количество калорий вручную (только число):", reply_markup=food_cancel_keyboard())
+    msg = await bot.send_message(chat_id, f"✏️ Введи количество калорий вручную (число).\n{MANUAL_NUTRITION_HINT}", reply_markup=food_cancel_keyboard())
     user_temp_messages.setdefault(callback.from_user.id, {})['diet_temp'] = msg.message_id
     await callback.message.delete()
     await callback.answer()
@@ -427,13 +449,10 @@ async def food_confirm_manual(callback: CallbackQuery, bot: Bot, state: FSMConte
 
 @router.message(DietState.manual_calories)
 async def manual_calories(message: Message, bot: Bot, state: FSMContext):
-    import math
     try:
-        calories = float((message.text or "").strip().replace(',', '.'))
-        if not math.isfinite(calories) or calories <= 0 or calories > 10000:
-            raise ValueError
-    except (ValueError, AttributeError):
-        await message.answer("❌ Введи корректное число калорий (например, 350):")
+        calories, macros = _parse_manual_nutrition(message.text)
+    except ValueError:
+        await message.answer("❌ Введи корректное число калорий (например, 350) или ккал и БЖУ (350 20 10 40):")
         return
 
     user_id = message.from_user.id
@@ -444,13 +463,13 @@ async def manual_calories(message: Message, bot: Bot, state: FSMContext):
     data = await state.get_data()
     meal_type = data.get('meal_type')
     description = data.get('food_description', '')
-    save_food_log(user_id, meal_type, description, calories)
+    save_food_log(user_id, meal_type, description, calories, **(macros or {}))
     asyncio.create_task(run_in_thread(sync_diet_rating_for_today, user_id))
 
-    await state.update_data(manual_calories_value=calories)
+    await state.update_data(manual_calories_value=calories, manual_macros=macros)
     await state.set_state(DietState.new_food_name)
     msg = await message.answer(
-        f"✅ Записано: {int(calories)} ккал\n\nСохранить в «Мои блюда»?",
+        f"{_logged_text(calories, macros)}\n\nСохранить в «Мои блюда»?",
         reply_markup=save_food_keyboard()
     )
     user_temp_messages.setdefault(user_id, {})['diet_temp'] = msg.message_id
@@ -462,9 +481,10 @@ async def save_food_skip(callback: CallbackQuery, bot: Bot, state: FSMContext):
     user_id = callback.from_user.id
     data = await state.get_data()
     calories = data.get('manual_calories_value')
+    macros = data.get('manual_macros')
     await callback.message.delete()
     await state.clear()
-    temp_msg = await callback.message.answer(f"✅ Записано: {int(calories)} ккал.")
+    temp_msg = await callback.message.answer(_logged_text(calories, macros) + ".")
     await asyncio.sleep(2)
     await delete_message_safe(bot, callback.message.chat.id, temp_msg.message_id)
     await show_diet_menu(user_id, callback.message.chat.id, bot)
@@ -493,14 +513,15 @@ async def save_my_food_name(message: Message, bot: Bot, state: FSMContext):
 
     data = await state.get_data()
     calories = data.get('manual_calories_value')
+    macros = data.get('manual_macros')
 
-    add_my_food(user_id, name, calories)
+    add_my_food(user_id, name, calories, **(macros or {}))
     success_msg = await message.answer(f"✅ Блюдо «{name}» сохранено в Мои блюда.")
     await asyncio.sleep(2)
     await delete_message_safe(bot, message.chat.id, success_msg.message_id)
 
     await state.clear()
-    temp_msg = await message.answer(f"✅ Записано: {int(calories)} ккал.")
+    temp_msg = await message.answer(_logged_text(calories, macros) + ".")
     await asyncio.sleep(2)
     await delete_message_safe(bot, message.chat.id, temp_msg.message_id)
     await show_diet_menu(user_id, message.chat.id, bot)
@@ -726,7 +747,7 @@ async def show_food_history_page(user_id: int, chat_id: int, bot: Bot, state: FS
         lines = []
         for date in page_dates:
             food_cursor = db.execute('''
-                SELECT meal_type, food_description, calories
+                SELECT meal_type, food_description, calories, protein, fat, carbs
                 FROM diet_log
                 WHERE user_id = ? AND date = ?
                 ORDER BY timestamp
@@ -735,10 +756,19 @@ async def show_food_history_page(user_id: int, chat_id: int, bot: Bot, state: FS
             formatted_date = datetime.strptime(date, '%Y-%m-%d').strftime('%d.%m.%Y')
             lines.append(f"\n📅 {formatted_date}")
             total_day_cal = 0
-            for meal, desc, cal in day_foods:
+            day_macros = dict.fromkeys(MACRO_KEYS, 0.0)
+            has_macros = False
+            for meal, desc, cal, p, f, c in day_foods:
                 lines.append(f"  {meal}: {desc} ({int(cal)} ккал)")
                 total_day_cal += cal
-            lines.append(f"  🔥 Итого за день: {int(total_day_cal)} ккал")
+                if p is not None:
+                    has_macros = True
+                    for k, v in zip(MACRO_KEYS, (p, f, c)):
+                        day_macros[k] += v or 0
+            total_line = f"  🔥 Итого за день: {int(total_day_cal)} ккал"
+            if has_macros:
+                total_line += f" ({format_macros(*day_macros.values())})"
+            lines.append(total_line)
         text = "📖 История еды\n" + "\n".join(lines)
 
     nav_buttons = []

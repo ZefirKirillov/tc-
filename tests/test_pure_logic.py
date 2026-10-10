@@ -81,7 +81,7 @@ class TestUniqueViolationHelper(unittest.TestCase):
             db._conn.row_factory = sqlite3.Row
             repo.db = db
             try:
-                db.execute("CREATE TABLE my_foods (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL, calories REAL NOT NULL, UNIQUE(user_id, name))")
+                db.execute("CREATE TABLE my_foods (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL, calories REAL NOT NULL, protein REAL, fat REAL, carbs REAL, UNIQUE(user_id, name))")
                 db.commit()
                 repo.add_my_food(1, "apple", 100.0)
                 repo.add_my_food(1, "apple", 100.0)  # must not raise
@@ -101,6 +101,49 @@ class TestCalorieGuard(unittest.TestCase):
             calculate_daily_calories(2000.0, "loss", 5.0, 0, "m"), (2000.0, "ok"))
         self.assertEqual(
             calculate_daily_calories(2000.0, "gain", 5.0, -3, "m"), (2000.0, "ok"))
+
+
+class TestFoodNutritionParsing(unittest.TestCase):
+    def test_kcal_and_macros(self):
+        from trackcheck.services.ai_service import parse_food_estimate
+        self.assertEqual(parse_food_estimate("450 35 12 50"),
+                         {"calories": 450.0, "protein": 35.0, "fat": 12.0, "carbs": 50.0})
+
+    def test_calories_only_keeps_old_behaviour(self):
+        from trackcheck.services.ai_service import parse_food_estimate
+        self.assertEqual(parse_food_estimate("Примерно 520"),
+                         {"calories": 520.0, "protein": None, "fat": None, "carbs": None})
+        self.assertIsNone(parse_food_estimate("не знаю"))
+        self.assertIsNone(parse_food_estimate(""))
+
+    def test_inconsistent_macros_scaled_to_kcal(self):
+        from trackcheck.services.ai_service import parse_food_estimate
+        r = parse_food_estimate("500 100 50 100")  # 4*100 + 9*50 + 4*100 = 1250 ккал
+        self.assertEqual(r["calories"], 500.0)
+        self.assertAlmostEqual(r["protein"] * 4 + r["fat"] * 9 + r["carbs"] * 4, 500, delta=2)
+        self.assertAlmostEqual(r["protein"] / r["carbs"], 1.0, places=2)
+
+    def test_photo_answer(self):
+        from trackcheck.services.ai_service import parse_food_photo
+        desc, n = parse_food_photo("гречка с курицей 480 36 13 52")
+        self.assertEqual(desc, "гречка с курицей")
+        self.assertEqual((n["calories"], n["protein"], n["fat"], n["carbs"]), (480.0, 36.0, 13.0, 52.0))
+        desc, n = parse_food_photo("салат цезарь 520")
+        self.assertEqual((desc, n["calories"], n["protein"]), ("салат цезарь", 520.0, None))
+
+
+class TestMacroGoals(unittest.TestCase):
+    def test_goals_add_up_to_calories(self):
+        from trackcheck.database.repositories import calculate_macro_goals
+        g = calculate_macro_goals(2000, 70, "loss")
+        self.assertEqual(g["protein"], 140)  # 2 г/кг при похудении
+        self.assertAlmostEqual(g["protein"] * 4 + g["fat"] * 9 + g["carbs"] * 4, 2000, delta=10)
+
+    def test_protein_capped_and_no_weight(self):
+        from trackcheck.database.repositories import calculate_macro_goals
+        self.assertEqual(calculate_macro_goals(1500, 200, "loss")["protein"], round(1500 * 0.35 / 4))
+        self.assertEqual(calculate_macro_goals(2000, None, "maintain")["protein"], 125)
+        self.assertEqual(calculate_macro_goals(0, 70, "gain"), {"protein": 0.0, "fat": 0.0, "carbs": 0.0})
 
 
 class TestChartRepsParsingBehavior(unittest.TestCase):
