@@ -231,12 +231,7 @@ export default function Dashboard({ me, setMe, go, openCheckin, askAI }: {
         </Widget>
 
         <Widget className="w-wide w-tasks" label="Задачи" glow={tasksDone} onClick={() => go('tasks')}>
-          <span className="hstack spread" style={{ width: '100%' }}>
-            <span className="w-title"><Ico.tasks size={16} /> Задачи</span>
-            <span className="num muted" style={{ fontSize: 13 }}>
-              {tasks == null ? '…' : allTasks.length === 0 ? '' : `${allTasks.length - openTasks.length}/${allTasks.length}`}
-            </span>
-          </span>
+          <span className="w-title"><Ico.tasks size={16} /> Задачи</span>
           {tasks == null ? <span className="muted hstack" style={{ gap: 8 }}><Spinner /> Загрузка…</span>
             : openTasks.length === 0 ? <span className="muted">{allTasks.length ? 'Всё сделано 🎉' : 'Задач пока нет'}</span>
             : (

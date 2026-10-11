@@ -311,6 +311,14 @@ async def api_diet_log_post(request: web.Request):
 
 
 @require_user
+async def api_diet_history(request: web.Request):
+    from trackcheck.database.repositories import get_food_history
+    user_id = request["tg_user"]["id"]
+    foods = await run_db(get_food_history, user_id)
+    return web.json_response({"ok": True, "data": {"foods": foods}})
+
+
+@require_user
 async def api_workout_get(request: web.Request):
     from trackcheck.database.repositories import (
         get_ai_plan, get_today_plan, get_today_session,
@@ -437,6 +445,55 @@ async def api_workout_log_ex(request: web.Request):
     data = await run_db(_log)
     if not data:
         return web.json_response({"ok": False, "error": "bad_session"}, status=404)
+    return web.json_response({"ok": True, "data": data})
+
+
+@require_user
+async def api_workout_undo(request: web.Request):
+    """Undo the marks of one plan exercise in an open session: {session_id, exercise}.
+    Removes every log standing for it (a replacement can log several)."""
+    import json as _json
+    from trackcheck.database.connection import db
+    from trackcheck.services.workout_service import exercise_name
+    user_id = request["tg_user"]["id"]
+    body = await _json_body(request)
+    if body is None:
+        return _err("bad_json")
+    ex = body.get("exercise") or {}
+    if not isinstance(ex, dict) or not (ex.get("exercise") or ex.get("name")):
+        return _err("bad_exercise")
+    name = exercise_name(ex)
+    try:
+        session_id = int(body.get("session_id"))
+    except (TypeError, ValueError):
+        return _err("bad_session")
+
+    def _undo():
+        cur = db.execute(
+            "SELECT status FROM ai_workout_sessions WHERE id = ? AND user_id = ?", (session_id, user_id))
+        row = cur.fetchone()
+        if not row or row[0] == "done":
+            return None
+        cur = db.execute(
+            "SELECT id, exercise_name, planned_json FROM ai_exercise_logs WHERE session_id = ? AND user_id = ?",
+            (session_id, user_id))
+        ids = []
+        for log_id, log_name, planned_json in cur.fetchall():
+            try:
+                planned = _json.loads(planned_json) if planned_json else None
+            except ValueError:
+                planned = None
+            key = exercise_name(planned) if isinstance(planned, dict) else log_name
+            if key == name:
+                ids.append(log_id)
+        for log_id in ids:
+            db.execute("DELETE FROM ai_exercise_logs WHERE id = ?", (log_id,))
+        db.commit()
+        return {"removed": len(ids)}
+
+    data = await run_db(_undo)
+    if data is None:
+        return _err("bad_session", 404)
     return web.json_response({"ok": True, "data": data})
 
 
@@ -1263,6 +1320,7 @@ def create_api_app() -> web.Application:
     app.router.add_delete("/api/tasks/{task_id}", api_task_delete)
     app.router.add_get("/api/diet", api_diet_get)
     app.router.add_post("/api/diet/log", api_diet_log_post)
+    app.router.add_get("/api/diet/history", api_diet_history)
     app.router.add_post("/api/diet/photo", api_diet_photo)
     app.router.add_post("/api/diet/estimate", api_diet_estimate)
     app.router.add_post("/api/diet/profile", api_diet_profile_post)
@@ -1273,6 +1331,7 @@ def create_api_app() -> web.Application:
     app.router.add_post("/api/workout/start", api_workout_start)
     app.router.add_post("/api/workout/log", api_workout_log_ex)
     app.router.add_post("/api/workout/log-text", api_workout_log_text)
+    app.router.add_post("/api/workout/undo", api_workout_undo)
     app.router.add_post("/api/workout/finish", api_workout_finish)
     app.router.add_post("/api/workout/extra", api_workout_extra)
     app.router.add_post("/api/workout/extra/cancel", api_workout_extra_cancel)

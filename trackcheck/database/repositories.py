@@ -461,6 +461,26 @@ def get_today_food_log(user_id: int) -> list:
 
 
 
+def get_food_history(user_id: int, limit: int = 300) -> list:
+    """Ранее записанные блюда, новые сверху, без повторов (по названию без учёта регистра).
+    Для каждого блюда — последние калории и БЖУ."""
+    cursor = db.execute('''
+        SELECT food_description, calories, protein, fat, carbs FROM diet_log
+        WHERE user_id = ? ORDER BY id DESC LIMIT 2000
+    ''', (user_id,))
+    seen, foods = set(), []
+    for desc, cal, p, f, c in cursor.fetchall():
+        key = (desc or '').strip().casefold()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        foods.append({"description": desc.strip(), "calories": cal, "protein": p, "fat": f, "carbs": c})
+        if len(foods) >= limit:
+            break
+    return foods
+
+
+
 def save_weight_log(user_id: int, weight: float):
     today = user_today_str(user_id)
     db.execute('INSERT INTO weight_log (user_id, date, weight) VALUES (?, ?, ?)', (user_id, today, weight))

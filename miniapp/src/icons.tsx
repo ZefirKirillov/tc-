@@ -42,6 +42,7 @@ export const Ico = {
   sleep: (p: P) => <I {...p}><path d="M13 5h5l-5 6h5M4 13h4l-4 5h4" /></I>,
   activity: (p: P) => <I {...p}><path d="M3 12h4l2.5-6 5 12 2.5-6h4" /></I>,
   idle: (p: P) => <I {...p}><rect x="3" y="7" width="18" height="10" rx="5" /><path d="M7.5 10.5v3M6 12h3M15.5 11h.1M17.5 13h.1" /></I>,
+  search: (p: P) => <I {...p}><circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" /></I>,
   target: (p: P) => <I {...p}><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="4.5" /><circle cx="12" cy="12" r="0.8" /></I>,
 }
 

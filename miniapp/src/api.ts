@@ -131,6 +131,7 @@ export const api = {
   diet: () => req('/api/diet'),
   logFood: (description: string, calories: number, meal = 'Еда', macros: Macros | null = null) =>
     req('/api/diet/log', { method: 'POST', body: JSON.stringify({ description, calories, meal, ...macros }) }),
+  dietHistory: () => req('/api/diet/history'),
   dietPhoto: (file: File) => reqPhoto('/api/diet/photo', file),
   dietEstimate: (description: string) =>
     req('/api/diet/estimate', { method: 'POST', body: JSON.stringify({ description }) }),
@@ -146,6 +147,8 @@ export const api = {
     req('/api/workout/log', { method: 'POST', body: JSON.stringify({ session_id, exercise, action, result }) }),
   workoutLogText: (session_id: number, exercise: any, text: string) =>
     req('/api/workout/log-text', { method: 'POST', body: JSON.stringify({ session_id, exercise, text }) }),
+  workoutUndo: (session_id: number, exercise: any) =>
+    req('/api/workout/undo', { method: 'POST', body: JSON.stringify({ session_id, exercise }) }),
   workoutFinish: (session_id: number) =>
     req('/api/workout/finish', { method: 'POST', body: JSON.stringify({ session_id }) }),
   workoutExtra: (day: string) =>

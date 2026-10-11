@@ -176,6 +176,22 @@ export default function Workout() {
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
   }
 
+  // Back to the previous exercise: its marks are removed and it becomes current again.
+  async function undo() {
+    if (!sessionId || idx === 0) return
+    const prev = Math.min(idx, exs.length) - 1
+    const ex = exs[prev]
+    setBusy(true)
+    try {
+      await api.workoutUndo(sessionId, ex)
+      setData({ ...data, logs: (data.logs ?? []).filter((l: any) => logKey(l) !== exName(ex)) })
+      setIdx(prev)
+      setManual(false)
+      setTxt('')
+      hapticSelect()
+    } catch (e) { b.setErr(e) } finally { setBusy(false) }
+  }
+
   function appendLog(ex: any, status: 'done' | 'skipped', result: any) {
     setData({ ...data, logs: [...(data.logs ?? []), { exercise_name: exName(ex), status, result, planned: ex }] })
   }
@@ -564,6 +580,11 @@ export default function Workout() {
                 </div>
               ) : null}
               <div className="hstack mt" style={{ gap: 4, marginLeft: -8, flexWrap: 'wrap' }}>
+                {idx > 0 && (
+                  <button onClick={undo} disabled={busy} className="btn btn-quiet btn-sm" aria-label="Вернуться к предыдущему упражнению">
+                    <Ico.back size={15} /> Назад
+                  </button>
+                )}
                 <button onClick={() => log('skip')} disabled={busy} className="btn btn-quiet btn-sm">
                   <Ico.skip size={15} /> Пропустить
                 </button>
@@ -576,7 +597,24 @@ export default function Workout() {
               </div>
             </div>
           ) : (
-            <Empty icon="flag" title="Все упражнения отмечены" text="Заверши сессию, чтобы засчитать тренировку и получить искру." />
+            <Empty icon="flag" title="Все упражнения отмечены" text="Заверши сессию, чтобы засчитать тренировку и получить искру."
+              action={exs.length > 0 && (
+                <button onClick={undo} disabled={busy} className="btn btn-quiet btn-sm">
+                  <Ico.back size={15} /> Назад к последнему
+                </button>
+              )} />
+          )}
+
+          {!allMarked && idx + 1 < exs.length && (
+            <div className="ex-ahead" aria-label="Дальше по плану">
+              {exs.slice(idx + 1).map((e, j) => (
+                <div key={idx + 1 + j} className="row">
+                  <span className="row-idx num">{String(idx + 2 + j).padStart(2, '0')}</span>
+                  <span className="wrap grow">{exName(e)}</span>
+                  <span className="num" style={{ fontSize: 13, flex: 'none', maxWidth: '40%', textAlign: 'right' }}>{target(e)}</span>
+                </div>
+              ))}
+            </div>
           )}
 
           {extraDay && (

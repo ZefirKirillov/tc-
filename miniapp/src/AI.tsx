@@ -14,6 +14,8 @@ export default function AI({ initialQuestion, onConsumed }: { initialQuestion?: 
   // Answer being written right now (null until the first words arrive).
   const [live, setLive] = useState<string | null>(null)
   const [loading, setLoading] = useState(() => peek('ai') === undefined)
+  // The question being answered right now — shown above «Check думает…».
+  const [asked, setAsked] = useState('')
 
   const setAnswer = (a: string | null) => setAnswerRaw(keep('ai', a))
   // Once a new question is asked, the slower «last answer» load must not overwrite it.
@@ -39,6 +41,7 @@ export default function AI({ initialQuestion, onConsumed }: { initialQuestion?: 
     haptic('medium')
     try {
       setAnswerKind(advice ? 'advice' : 'ask')
+      setAsked(advice ? '' : question)
       setLive(null)
       // Text appears as the model writes it; the saved answer is set at the end.
       const onText = (t: string) => setLive(t)
@@ -49,6 +52,7 @@ export default function AI({ initialQuestion, onConsumed }: { initialQuestion?: 
     } catch (e) { b.setErr(e) } finally { setBusy(false); setLive(null) }
   }
 
+  const adviceBusy = busy && answerKind === 'advice'
   const label = answerKind === 'advice' ? 'Совет' : answerKind === 'ask' ? 'Ответ' : 'Последний ответ'
 
   return (
@@ -56,9 +60,9 @@ export default function AI({ initialQuestion, onConsumed }: { initialQuestion?: 
       {b.BannerEl}
 
       <button onClick={() => ask(true)} disabled={busy} className="cta" style={{ marginTop: 0 }}>
-        {busy ? <Spinner className="cta-icon" fallback={<Ico.ai size={22} className="cta-icon" />} /> : <Ico.ai size={22} className="cta-icon" />}
+        {adviceBusy ? <Spinner className="cta-icon" fallback={<Ico.ai size={22} className="cta-icon" />} /> : <Ico.ai size={22} className="cta-icon" />}
         <span className="grow">
-          <span style={{ fontWeight: 600, display: 'block' }}>{busy ? 'Check думает…' : 'Совет на сегодня'}</span>
+          <span style={{ fontWeight: 600, display: 'block' }}>{adviceBusy ? 'Готовлю совет…' : 'Совет на сегодня'}</span>
           <span className="row-meta">По твоим оценкам, тренировкам и питанию</span>
         </span>
         <Ico.arrow size={18} className="accent" />
@@ -72,9 +76,18 @@ export default function AI({ initialQuestion, onConsumed }: { initialQuestion?: 
       </Section>
 
       <Section label={label}>
-        {busy && live
+        {busy && (live
           ? <div className="panel answer" aria-live="polite">{live}<span className="caret" aria-hidden /></div>
-          : (loading || busy) && <Skeletons n={1} h={120} />}
+          : (
+            <div className="panel" role="status">
+              {asked && <div className="thinking-q">«{asked}»</div>}
+              <div className="thinking">
+                <span className="dots" aria-hidden><i /><i /><i /></span>
+                {answerKind === 'advice' ? 'Check готовит совет…' : 'Check думает над ответом…'}
+              </div>
+            </div>
+          ))}
+        {loading && !busy && <Skeletons n={1} h={120} />}
         {!loading && !busy && (answer
           ? <div className="panel answer">{answer}</div>
           : <Empty icon="ai" title="Здесь появится ответ" text="Задай вопрос или попроси совет — Check учитывает твои данные из TrackCheck." />)}

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, keep, macrosOf, peek, type Macros } from './api'
 import { Ico } from './icons'
 import MainAction from './MainAction'
-import { haptic, type MainCfg } from './tg'
+import { haptic, hapticSelect, type MainCfg } from './tg'
 import DietSetup from './DietSetup'
 import { Empty, fmt, LoadError, Meter, pulseOk, Section, Seg, Sheet, Skeleton, Skeletons, Spinner, useBanner } from './ui'
 
@@ -10,6 +10,8 @@ const MEALS: Array<[string, string]> = [['Завтрак', 'Завтрак'], ['
 
 // what changes when food is logged: the day total and the new (last) journal entry
 const FOOD_PULSE = '[data-pulse="diet-day"], [data-pulse="diet-log"] > .row:last-child'
+
+type Food = { description: string; calories: number; protein: number | null; fat: number | null; carbs: number | null }
 
 function num(s: string): number {
   return parseFloat(s.replace(',', '.'))
@@ -44,6 +46,9 @@ export default function Diet() {
   // Entry forms live in sheets — the screen itself only shows the day.
   const [adding, setAdding] = useState(false)
   const [bodyOpen, setBodyOpen] = useState(false)
+  // Everything logged before — picked from a searchable list in the «Добавить еду» sheet.
+  const [foods, setFoods] = useState<Food[] | null>(() => peek('foods') ?? null)
+  const [foodQ, setFoodQ] = useState('')
 
   async function load() {
     try {
@@ -54,6 +59,19 @@ export default function Diet() {
     } catch (e) { if (data) b.setErr(e); else setLoadErr(e) }
   }
   useEffect(() => { load() }, [])
+
+  useEffect(() => {
+    if (!adding) return
+    setFoodQ('')
+    api.dietHistory().then((r) => setFoods(keep('foods', r.foods))).catch(() => {})
+  }, [adding])
+
+  function pickFood(f: Food) {
+    hapticSelect()
+    setDesc(f.description)
+    setCal(String(Math.round(f.calories)))
+    setMacros(macrosOf(f))
+  }
 
   // Release the object URL of the previous photo preview.
   useEffect(() => () => { if (photoPrev) URL.revokeObjectURL(photoPrev.url) }, [photoPrev])
@@ -236,6 +254,36 @@ export default function Diet() {
           <Seg value={meal} options={MEALS} onChange={setMeal} label="Приём пищи" />
           {!photoPrev ? (
             <>
+              {foods && foods.length > 0 && (() => {
+                const fq = foodQ.trim().toLowerCase()
+                const shown = fq ? foods.filter((f) => f.description.toLowerCase().includes(fq)) : foods
+                return (
+                  <div className="mt">
+                    <div className="label" style={{ marginBottom: 6 }}>Ранее записанные</div>
+                    <div className="search">
+                      <Ico.search size={16} className="search-icon" />
+                      <input value={foodQ} onChange={(e) => setFoodQ(e.target.value)} placeholder="Поиск по блюдам"
+                        className="field" maxLength={100} aria-label="Поиск по ранее записанным блюдам" />
+                    </div>
+                    <div className="rows food-hist">
+                      {shown.length === 0
+                        ? <div className="row muted" style={{ fontSize: 14 }}>Ничего не найдено</div>
+                        : shown.map((f) => {
+                          const on = desc === f.description && cal === String(Math.round(f.calories))
+                          return (
+                            <button key={f.description} className={`row food-pick${on ? ' is-on' : ''}`} onClick={() => pickFood(f)}>
+                              <span className="grow wrap">
+                                <span style={{ display: 'block' }}>{f.description}</span>
+                                {macrosOf(f) && <span className="row-meta num" style={{ display: 'block' }}>{macroLine(macrosOf(f)!)}</span>}
+                              </span>
+                              <span className="num" style={{ flex: 'none' }}>{fmt(Math.round(f.calories))}</span>
+                            </button>
+                          )
+                        })}
+                    </div>
+                  </div>
+                )
+              })()}
               <input value={desc} onChange={(e) => { setDesc(e.target.value); setMacros(null) }} placeholder="Что съел? Например, овсянка 100 г"
                 className="field mt" maxLength={300} />
               <button onClick={estimate} disabled={estBusy || desc.trim().length < 3} className="btn btn-ghost mt" style={{ minHeight: 44, width: '100%' }}>
