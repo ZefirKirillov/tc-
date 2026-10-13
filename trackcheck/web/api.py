@@ -1365,8 +1365,8 @@ async def api_stats_notes(request: web.Request):
     return web.json_response({"ok": True, "data": {"segments": segments}})
 
 
-def create_api_app() -> web.Application:
-    app = web.Application()
+def register_api_routes(app: web.Application) -> None:
+    """The one list of /api/* routes — used by the real server (server.py) and create_api_app()."""
     app.router.add_get("/api/me", api_me)
     app.router.add_get("/api/ratings", api_ratings_get)
     app.router.add_post("/api/ratings", api_ratings_post)
@@ -1407,4 +1407,9 @@ def create_api_app() -> web.Application:
     app.router.add_post("/api/ai/ask", api_ai_ask)
     app.router.add_post("/api/ai/advice", api_ai_advice)
     app.router.add_get("/api/ai/last", api_ai_last)
+
+
+def create_api_app() -> web.Application:
+    app = web.Application()
+    register_api_routes(app)
     return app
