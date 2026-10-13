@@ -633,6 +633,10 @@ async def api_workout_history(request: web.Request):
                 "date": date, "session_key": skey, "status": status,
                 "done": sum(1 for l in logs if l["status"] == "done"),
                 "skipped": sum(1 for l in logs if l["status"] == "skipped"),
+                "exercises": [{
+                    "name": l["exercise_name"], "status": l["status"],
+                    "planned": l.get("planned"), "result": l.get("result"),
+                } for l in logs],
             })
         return out
 

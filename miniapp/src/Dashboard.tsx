@@ -155,6 +155,9 @@ export default function Dashboard({ me, setMe, go, openCheckin, askAI }: {
   const maxRank = nextTotal == null || nextTotal <= sparks
 
   const ws = workoutState(workout)
+  // A finished workout glows by its activity score, like the diet widget: 1/10 barely, 10/10 fully.
+  const actScore = ratings['активность']
+  const wGlow = ws.tone === 'gold' && ws.glow && actScore ? actScore / 10 : ws.glow
   const near = dietOn ? dietCloseness(kcal, kcalGoal) : 0
 
   const allTasks = tasks ?? []
@@ -211,7 +214,7 @@ export default function Dashboard({ me, setMe, go, openCheckin, askAI }: {
           })}
         </div>
 
-        <Widget className="w-square" label="Тренировка" tone={ws.tone} glow={ws.glow} onClick={() => go('workout')}>
+        <Widget className="w-square" label="Тренировка" tone={ws.tone} glow={wGlow} onClick={() => go('workout')}>
           <span className="w-title"><Ico.dumbbell size={16} /> Тренировка</span>
           <Score value={ratings['активность']} />
           <span className={`w-foot${ws.glow ? (ws.tone === 'silver' ? ' is-silver' : ' is-gold') : ''}`}>{ws.text}</span>

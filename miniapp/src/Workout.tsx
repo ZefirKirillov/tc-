@@ -93,6 +93,7 @@ export default function Workout() {
   const [idx, setIdx] = useState(() => sessionState(peek('workout')).idx)
   const [busy, setBusy] = useState(false)
   const [hist, setHist] = useState<any[] | null>(null)
+  const [histOpen, setHistOpen] = useState<number | null>(null)
   // Secondary tools live in one sheet: menu → history | review
   const [tools, setTools] = useState<null | 'menu' | 'history' | 'review'>(null)
   const [manual, setManual] = useState(false)
@@ -294,6 +295,7 @@ export default function Workout() {
   async function openHistory() {
     hapticSelect()
     setTools('history')
+    setHistOpen(null)
     try { setHist(await api.workoutHistory()) }
     catch (e) { b.setErr(e); setTools(null) }
   }
@@ -675,15 +677,46 @@ export default function Workout() {
             ? <Empty icon="history" title="Истории пока нет" text="Завершённые тренировки появятся здесь." />
             : (
               <div className="rows">
-                {hist.map((h, i) => (
-                  <div key={i} className="row">
-                    <span className="num" style={{ fontSize: 13, flex: 'none' }}>{fmtDate(h.date, true)}</span>
-                    <span className={`grow label${h.status === 'done' ? ' accent' : ''}`}>{SESSION_STATUS[h.status] ?? h.status}</span>
-                    <span className="num muted" style={{ fontSize: 13 }}>
-                      <span className="accent">{h.done}</span> / {h.skipped} проп.
-                    </span>
-                  </div>
-                ))}
+                {hist.map((h, i) => {
+                  const open = histOpen === i
+                  const exs: any[] = h.exercises ?? []
+                  return (
+                    <div key={i} className="row" aria-expanded={open}
+                      style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8, cursor: 'pointer' }}
+                      onClick={() => { hapticSelect(); setHistOpen(open ? null : i) }}>
+                      <div className="hstack" style={{ gap: 12 }}>
+                        <span className="num" style={{ fontSize: 13, flex: 'none' }}>{fmtDate(h.date, true)}</span>
+                        <span className={`grow label${h.status === 'done' ? ' accent' : ''}`}>{SESSION_STATUS[h.status] ?? h.status}</span>
+                        <span className="num muted" style={{ fontSize: 13 }}>
+                          <span className="accent">{h.done}</span> / {h.skipped} проп.
+                        </span>
+                        <span className="muted" style={{ flex: 'none', display: 'flex', transform: `rotate(${open ? 90 : 0}deg)`, transition: 'transform var(--t-fast)' }}>
+                          <Ico.arrow size={14} />
+                        </span>
+                      </div>
+                      {open && (exs.length === 0
+                        ? <div className="row-meta">Упражнения не записаны</div>
+                        : exs.map((l, j) => {
+                          const planned = l.planned ? exName(l.planned) : null
+                          return (
+                            <div key={j} className="hstack" style={{ gap: 10, alignItems: 'flex-start' }}>
+                              <span className={l.status === 'done' ? 'accent' : 'muted'} style={{ flex: 'none', marginTop: 2 }}>
+                                {l.status === 'done' ? <Ico.check size={14} /> : <Ico.skip size={14} />}
+                              </span>
+                              <div className="grow wrap">
+                                <div className={l.status === 'done' ? '' : 'muted'}>{l.name}</div>
+                                <div className="row-meta">
+                                  {l.status === 'done' ? (resultText(l.result) || (l.planned ? target(l.planned) : 'сделано'))
+                                    : l.status === 'skipped' ? 'пропущено' : 'не отмечено'}
+                                  {planned && planned !== l.name ? ` · вместо ${planned}` : ''}
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        }))}
+                    </div>
+                  )
+                })}
               </div>
             )}
         </Sheet>
