@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, keep, peek } from './api'
 import type { Tab } from './App'
+import BodySheet from './Body'
 import CheckIn, { CATS, MANUAL } from './CheckIn'
 import { Ico } from './icons'
 import { cloudGet, cloudSet, hapticSelect } from './tg'
@@ -118,6 +119,7 @@ export default function Dashboard({ me, setMe, go, openCheckin, askAI }: {
   const [workout, setWorkout] = useState<any>(() => peek('workout') ?? null)
   const [tasks, setTasks] = useState<any[] | null>(() => peek('tasks') ?? null)
   const [question, setQuestion] = useState('')
+  const [bodyOpen, setBodyOpen] = useState(false)
 
   useEffect(() => {
     api.workout().then((d) => setWorkout(keep('workout', d))).catch(() => {})
@@ -159,6 +161,8 @@ export default function Dashboard({ me, setMe, go, openCheckin, askAI }: {
   const actScore = ratings['активность']
   const wGlow = ws.tone === 'gold' && ws.glow && actScore ? actScore / 10 : ws.glow
   const near = dietOn ? dietCloseness(kcal, kcalGoal) : 0
+
+  const body = me.body_score
 
   const allTasks = tasks ?? []
   const openTasks = allTasks.filter((t) => !t.is_done)
@@ -233,6 +237,14 @@ export default function Dashboard({ me, setMe, go, openCheckin, askAI }: {
           ) : <span className="w-foot">Задай норму</span>}
         </Widget>
 
+        <Widget className="w-wide w-body" label="Тело" glow={body ? body.score / 10 : 0} onClick={() => setBodyOpen(true)}>
+          <span className="w-body-text">
+            <span className="w-title"><Ico.body size={16} /> Тело</span>
+            <span className="w-foot">{body ? `Фото от ${fmtDate(body.date)} · обновить` : 'Пришли фото — оценю из 10'}</span>
+          </span>
+          <Score value={body?.score} />
+        </Widget>
+
         <Widget className="w-wide w-tasks" label="Задачи" glow={tasksDone} onClick={() => go('tasks')}>
           <span className="w-title"><Ico.tasks size={16} /> Задачи</span>
           {tasks == null ? <span className="muted hstack" style={{ gap: 8 }}><Spinner /> Загрузка…</span>
@@ -258,6 +270,10 @@ export default function Dashboard({ me, setMe, go, openCheckin, askAI }: {
         <CheckIn me={me} setMe={setMe} start={checkin >= 0 ? checkin : undefined}
           onClose={() => setCheckin(null)} onError={b.setErr}
           onSpark={() => { b.setOk('День отмечен — искра зажжена 🔥', 'event'); api.me().then(setMe).catch(() => {}) }} />
+      )}
+      {bodyOpen && (
+        <BodySheet onClose={() => setBodyOpen(false)}
+          onSaved={(r) => setMe((m: any) => ({ ...m, body_score: r }))} />
       )}
       {tour && <Tour onDone={endTour} />}
     </div>

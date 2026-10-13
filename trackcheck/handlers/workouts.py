@@ -27,8 +27,9 @@ from trackcheck.states.workout import WorkoutState, AIPlanState, WorkoutSessionS
 from trackcheck.services.ai_service import (
     gemini_generate_plan, gemini_parse_manual_plan, _fallback_parse_plan,
     gemini_edit_plan, gemini_parse_exercise_result, gemini_parse_free_workout,
-    gemini_monthly_review, analyze_body_photo,
+    gemini_monthly_review,
 )
+from trackcheck.services.body_score_service import score_photo_for_bot
 from trackcheck.services.tracker_service import sync_activity_rating_for_today
 from trackcheck.services.workout_service import (
     _format_full_plan, _format_session_detail, apply_monthly_changes,
@@ -76,7 +77,7 @@ async def handle_photo_analysis_start(callback: CallbackQuery, bot: Bot, state: 
     await state.clear()
     await delete_temp_messages(bot, callback.from_user.id, callback.message.chat.id, keep_ai=True)
     intro_msg = await callback.message.answer(
-        "📸 Отправь фото для анализа телосложения.\n\nИли нажми «❌ Отмена».",
+        "📸 Отправь фото себя в полный рост или по пояс — оценю тело из 10, скажу сильные и слабые места и что с ними делать.\n\nИли нажми «❌ Отмена».",
         reply_markup=photo_analysis_cancel_keyboard()
     )
     user_temp_messages.setdefault(callback.from_user.id, {})['photo_intro'] = intro_msg.message_id
@@ -121,18 +122,9 @@ async def analyze_photo(message: Message, bot: Bot, state: FSMContext):
     image.save(img_buffer, format='PNG')
     image_bytes = img_buffer.getvalue()
 
-    prompt = """Кратко проанализируй телосложение на фото. Формат ответа:
-• Сильные стороны (1-2 предложения)
-• Слабые стороны (1-2 предложения)
-• Рекомендации (2-3 конкретных совета)
-Без воды, по делу, макс 150 слов."""
-    await state.update_data(
-        retry_photo_bytes=image_bytes,
-        retry_photo_prompt=prompt,
-        retry_action="photo_analysis"
-    )
+    await state.update_data(retry_photo_bytes=image_bytes, retry_action="photo_analysis")
     try:
-        analysis = await run_in_thread(analyze_body_photo, image_bytes, prompt) or "❌ ИИ недоступен (нет API-ключа)."
+        analysis = await run_in_thread(score_photo_for_bot, user_id, image_bytes)
     except Exception as e:
         import traceback
         traceback.print_exc()

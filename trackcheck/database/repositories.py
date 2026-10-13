@@ -502,6 +502,75 @@ def save_body_fat(user_id: int, body_fat: float):
 
 
 
+def save_body_score(user_id: int, result: dict) -> dict:
+    """result — разбор фото из rate_body_photo(): {score, summary, strengths, weaknesses}."""
+    today = user_today_str(user_id)
+    db.execute('''
+        INSERT INTO body_scores (user_id, date, score, summary, strengths, weaknesses)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (user_id, today, int(result['score']), result.get('summary') or '',
+          json.dumps(result.get('strengths') or [], ensure_ascii=False),
+          json.dumps(result.get('weaknesses') or [], ensure_ascii=False)))
+    db.commit()
+    return {**result, 'date': today}
+
+
+
+def get_last_body_score(user_id: int) -> Optional[dict]:
+    cursor = db.execute('''
+        SELECT date, score, summary, strengths, weaknesses FROM body_scores
+        WHERE user_id = ? ORDER BY date DESC, id DESC LIMIT 1
+    ''', (user_id,))
+    row = cursor.fetchone()
+    if not row:
+        return None
+
+    def _list(raw):
+        try:
+            v = json.loads(raw or '[]')
+            return v if isinstance(v, list) else []
+        except (TypeError, ValueError):
+            return []
+
+    return {'date': row[0], 'score': row[1], 'summary': row[2] or '',
+            'strengths': _list(row[3]), 'weaknesses': _list(row[4])}
+
+
+
+def get_body_score_history(user_id: int) -> List[Tuple[str, int]]:
+    """[(date, score)] по возрастанию даты; при нескольких фото за день — последнее."""
+    cursor = db.execute('''
+        SELECT date, score FROM body_scores WHERE user_id = ? ORDER BY date, id
+    ''', (user_id,))
+    by_date = {}
+    for date, score in cursor.fetchall():
+        by_date[date] = score
+    return sorted(by_date.items())
+
+
+
+def get_potential_notes(user_id: int) -> Dict[tuple, dict]:
+    """{(kind, start, end, signature): {what, fix}}"""
+    cursor = db.execute('''
+        SELECT kind, start_date, end_date, signature, what, fix
+        FROM potential_notes WHERE user_id = ?
+    ''', (user_id,))
+    return {(r[0], r[1], r[2], r[3]): {'what': r[4], 'fix': r[5]} for r in cursor.fetchall()}
+
+
+
+def save_potential_note(user_id: int, kind: str, start: str, end: str, signature: str,
+                        what: str, fix: str):
+    db.execute('''
+        INSERT INTO potential_notes (user_id, kind, start_date, end_date, signature, what, fix)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, kind, start_date, end_date, signature)
+        DO UPDATE SET what = excluded.what, fix = excluded.fix
+    ''', (user_id, kind, start, end, signature, what, fix))
+    db.commit()
+
+
+
 def _is_unique_violation(exc: BaseException) -> bool:
     """True if exc is a UNIQUE-constraint violation on either backend.
 

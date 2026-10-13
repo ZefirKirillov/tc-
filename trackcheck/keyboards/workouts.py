@@ -8,7 +8,7 @@ from trackcheck.keyboards.common import with_back_kb, _back_button_row
 def workout_main_reply_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=with_back_kb([
         [InlineKeyboardButton(text="🏋️ Добавить выполнение", callback_data="menu_workout_add"),
-         InlineKeyboardButton(text="🤳 Анализ фото", callback_data="menu_photo_analysis")],
+         InlineKeyboardButton(text="🤳 Оценка тела", callback_data="menu_photo_analysis")],
         [InlineKeyboardButton(text="📋 Управление", callback_data="menu_workout_manage"),
          InlineKeyboardButton(text="📊 История", callback_data="workout_history")]
     ]))

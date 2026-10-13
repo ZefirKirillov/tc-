@@ -44,6 +44,7 @@ export const Ico = {
   idle: (p: P) => <I {...p}><rect x="3" y="7" width="18" height="10" rx="5" /><path d="M7.5 10.5v3M6 12h3M15.5 11h.1M17.5 13h.1" /></I>,
   search: (p: P) => <I {...p}><circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" /></I>,
   target: (p: P) => <I {...p}><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="4.5" /><circle cx="12" cy="12" r="0.8" /></I>,
+  body: (p: P) => <I {...p}><circle cx="12" cy="4.8" r="2.2" /><path d="M5 9.5c4.5 1.2 9.5 1.2 14 0M12 10.3v4.2M12 14.5l-3 6.5M12 14.5l3 6.5" /></I>,
 }
 
 export type IconName = keyof typeof Ico

@@ -49,6 +49,7 @@ RU_ERRORS = {
     "bad_day": "Этого дня нет в плане.",
     "session_exists": "На сегодня тренировка уже есть.",
     "bad_increment": "Прибавка — число от 0 до 100 кг.",
+    "no_body": "На фото не видно тела. Пришли фото в полный рост или по пояс.",
 }
 
 
@@ -85,7 +86,7 @@ async def api_me(request: web.Request):
     from trackcheck.database.repositories import (
         get_user_name, get_today_ratings, get_or_create_workout_data,
         get_or_create_rank_data, get_streak, get_diet_profile,
-        get_today_calories,
+        get_today_calories, get_last_body_score,
     )
     from trackcheck.services.gamification_service import (
         get_rank_name, get_rank_emoji, get_sparks_for_next_rank,
@@ -121,6 +122,7 @@ async def api_me(request: web.Request):
                 "today_calories": get_today_calories(user_id) if profile else 0,
                 "daily_goal": profile["daily_calories"] if profile else 0,
             },
+            "body_score": get_last_body_score(user_id),
         }
 
     data = await run_db(_load)
@@ -801,6 +803,32 @@ async def api_body_post(request: web.Request):
 
 
 @require_user
+async def api_body_score_get(request: web.Request):
+    """Latest body score from a photo, or null."""
+    from trackcheck.database.repositories import get_last_body_score
+    data = await run_db(get_last_body_score, request["tg_user"]["id"])
+    return web.json_response({"ok": True, "data": data})
+
+
+@require_user
+async def api_body_score_post(request: web.Request):
+    """Rate a body photo 1–10 and save it → {date, score, summary, strengths, weaknesses}."""
+    from trackcheck.utils.concurrency import run_in_thread
+    from trackcheck.database.repositories import save_body_score
+    from trackcheck.services.body_score_service import rate_body_photo, NO_BODY
+    image_bytes, error = await _read_photo(request)
+    if error:
+        return _err(error)
+    result = await run_in_thread(rate_body_photo, image_bytes)
+    if result is None:
+        return _err("ai_failed", 502)
+    if result.get("error") == NO_BODY:
+        return _err("no_body")
+    data = await run_db(save_body_score, request["tg_user"]["id"], result)
+    return web.json_response({"ok": True, "data": data})
+
+
+@require_user
 async def api_diet_profile_post(request: web.Request):
     """Calorie goal setup — same questions, ranges and formulas as the bot's diet setup
     (Mifflin–St Jeor × activity, goal adjustment with safety limits).
@@ -859,30 +887,24 @@ def _nutrition_json(nutrition: dict) -> dict:
                for k in ("protein", "fat", "carbs")}}
 
 
-@require_user
-async def api_diet_photo(request: web.Request):
-    """Analyze food photo → {description, calories, protein, fat, carbs}. Does NOT log — client confirms first."""
+async def _read_photo(request: web.Request):
+    """Multipart field "photo" → (PNG bytes, None) or (None, error code)."""
     import io
-    from trackcheck.utils.concurrency import run_in_thread
-    from trackcheck.services.ai_service import analyze_food_photo, parse_food_photo, FOOD_PHOTO_PROMPT
-    from trackcheck.database.repositories import get_diet_profile
-    if not await run_db(get_diet_profile, request["tg_user"]["id"]):
-        return _err("no_diet_profile")
     try:
         post = await request.post()
     except Exception:
-        return _err("bad_json")
+        return None, "bad_json"
     field = post.get("photo")
     if field is None:
-        return _err("photo_bad")
+        return None, "photo_bad"
     try:
         image_bytes = field.file.read() if hasattr(field, "file") else bytes(field)
     except Exception:
-        return _err("photo_bad")
+        return None, "photo_bad"
     if not image_bytes:
-        return _err("photo_bad")
+        return None, "photo_bad"
     if len(image_bytes) > 5 * 1024 * 1024:
-        return _err("photo_too_big")
+        return None, "photo_too_big"
     # Normalize to PNG (same as bot food.py) to keep model input stable.
     try:
         from PIL import Image
@@ -892,6 +914,20 @@ async def api_diet_photo(request: web.Request):
         image_bytes = buf.getvalue()
     except Exception:
         pass  # send raw bytes; model layer will fail gracefully → ai_failed
+    return image_bytes, None
+
+
+@require_user
+async def api_diet_photo(request: web.Request):
+    """Analyze food photo → {description, calories, protein, fat, carbs}. Does NOT log — client confirms first."""
+    from trackcheck.utils.concurrency import run_in_thread
+    from trackcheck.services.ai_service import analyze_food_photo, parse_food_photo, FOOD_PHOTO_PROMPT
+    from trackcheck.database.repositories import get_diet_profile
+    if not await run_db(get_diet_profile, request["tg_user"]["id"]):
+        return _err("no_diet_profile")
+    image_bytes, error = await _read_photo(request)
+    if error:
+        return _err(error)
     text = await run_in_thread(analyze_food_photo, image_bytes, FOOD_PHOTO_PROMPT)
     if text is None:
         return _err("ai_failed", 502)
@@ -1284,6 +1320,7 @@ async def api_stats_get(request: web.Request):
     from trackcheck.services.gamification_service import (
         get_rank_name, get_rank_emoji,
     )
+    from trackcheck.services.potential_service import get_potential
     user_id = request["tg_user"]["id"]
     try:
         days = int(request.query.get("days", "7"))
@@ -1307,10 +1344,25 @@ async def api_stats_get(request: web.Request):
             },
             "streak": get_streak(user_id),
             "workout": get_or_create_workout_data(user_id),
+            "potential": get_potential(user_id, days),
         }
 
     data = await run_db(_load)
     return web.json_response({"ok": True, "data": data})
+
+
+@require_user
+async def api_stats_notes(request: web.Request):
+    """What happened on each plateau/drawback of the potential chart and how to avoid it.
+    Slow on first call (AI writes missing notes), cached afterwards."""
+    from trackcheck.utils.concurrency import run_in_thread
+    from trackcheck.services.potential_service import explain_segments
+    try:
+        days = max(1, min(int(request.query.get("days", "7")), 30))
+    except ValueError:
+        days = 7
+    segments = await run_in_thread(explain_segments, request["tg_user"]["id"], days)
+    return web.json_response({"ok": True, "data": {"segments": segments}})
 
 
 def create_api_app() -> web.Application:
@@ -1330,7 +1382,10 @@ def create_api_app() -> web.Application:
     app.router.add_post("/api/diet/profile", api_diet_profile_post)
     app.router.add_get("/api/body", api_body_get)
     app.router.add_post("/api/body", api_body_post)
+    app.router.add_get("/api/body/score", api_body_score_get)
+    app.router.add_post("/api/body/score", api_body_score_post)
     app.router.add_get("/api/stats", api_stats_get)
+    app.router.add_get("/api/stats/notes", api_stats_notes)
     app.router.add_get("/api/workout", api_workout_get)
     app.router.add_post("/api/workout/start", api_workout_start)
     app.router.add_post("/api/workout/log", api_workout_log_ex)

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, keep, peek } from './api'
 import { Ico, type IconName } from './icons'
+import Potential from './Potential'
 import { Empty, fmt, fmtDate, LoadError, Meter, Section, Seg, Skeleton, Skeletons } from './ui'
 
 const CATS: Array<[string, string, IconName]> = [
@@ -44,6 +45,8 @@ export default function Stats() {
 
       {data && (
         <>
+          {data.potential && <Potential data={data.potential} days={days} />}
+
           <div className="panel section" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
             <div className="readout" style={{ gridColumn: '1 / -1' }}>
               <span className="label">Ранг</span>

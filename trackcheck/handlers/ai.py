@@ -20,9 +20,10 @@ from trackcheck.services.ai_service import (
     gemini_generate, gemini_generate_rating, gemini_generate_plan,
     gemini_parse_manual_plan, _fallback_parse_plan,
     gemini_monthly_review, get_full_context_for_ai, analyze_low_rating,
-    analyze_food_photo, analyze_body_photo, estimate_food_nutrition, parse_food_photo, stream_answer,
+    analyze_food_photo, estimate_food_nutrition, parse_food_photo, stream_answer,
     check_question_prompt, check_advice_prompt,
 )
+from trackcheck.services.body_score_service import score_photo_for_bot
 from trackcheck.services.workout_service import _format_full_plan
 from trackcheck.utils.concurrency import run_in_thread, run_db
 from trackcheck.utils.dates import user_today_str
@@ -308,13 +309,8 @@ async def _retry_photo_analysis(callback, bot, state):
     user_id = callback.from_user.id
     chat_id = callback.message.chat.id
     image_bytes = data.get("retry_photo_bytes")
-    prompt = data.get("retry_photo_prompt", """Кратко проанализируй телосложение на фото. Формат ответа:
-• Сильные стороны (1-2 предложения)
-• Слабые стороны (1-2 предложения)
-• Рекомендации (2-3 конкретных совета)
-Без воды, по делу, макс 150 слов.""")
     try:
-        analysis = await run_in_thread(analyze_body_photo, image_bytes, prompt) or "❌ Нет ответа"
+        analysis = await run_in_thread(score_photo_for_bot, user_id, image_bytes)
     except Exception as e:
         analysis = f"❌ Ошибка: {str(e)[:100]}"
     if analysis.startswith("❌"):

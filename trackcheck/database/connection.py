@@ -504,4 +504,32 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # Оценка тела по фото (1–10) — четвёртая часть «реализованного потенциала».
+    # Действует с даты фото до следующего фото. strengths/weaknesses — JSON.
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS body_scores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            summary TEXT,
+            strengths TEXT,
+            weaknesses TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    # Разборы плато/спадов на графике потенциала: один ИИ-вызов на отрезок,
+    # signature меняется вместе с данными отрезка → разбор пересчитывается.
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS potential_notes (
+            user_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            signature TEXT NOT NULL,
+            what TEXT NOT NULL,
+            fix TEXT NOT NULL,
+            PRIMARY KEY (user_id, kind, start_date, end_date, signature)
+        )
+    ''')
     db.commit()

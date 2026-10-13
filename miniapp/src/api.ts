@@ -140,7 +140,10 @@ export const api = {
   body: () => req('/api/body'),
   saveBody: (weight: number | null, body_fat: number | null) =>
     req('/api/body', { method: 'POST', body: JSON.stringify({ weight, body_fat }) }),
+  bodyScore: () => req('/api/body/score'),
+  bodyScorePhoto: (file: File) => reqPhoto('/api/body/score', file),
   stats: (days = 7) => req(`/api/stats?days=${days}`),
+  statsNotes: (days = 7) => req(`/api/stats/notes?days=${days}`),
   workout: () => req('/api/workout'),
   workoutStart: () => req('/api/workout/start', { method: 'POST', body: '{}' }),
   workoutLog: (session_id: number, exercise: any, action: 'done' | 'skip', result?: any) =>
