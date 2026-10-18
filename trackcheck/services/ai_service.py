@@ -115,6 +115,11 @@ def _log_ai_call(caller: str, detail: str = "") -> None:
         pass
 
 
+def _image_mime(image_bytes: bytes) -> str:
+    """JPEG из Mini App, PNG из бота — тип по сигнатуре файла."""
+    return "image/jpeg" if image_bytes[:3] == b"\xff\xd8\xff" else "image/png"
+
+
 def _openai_chat(provider: str, base_url: str, model: str, key: Optional[str],
                  prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None,
                  extra: Optional[dict] = None, timeout: float = 120) -> Optional[str]:
@@ -136,7 +141,7 @@ def _openai_chat(provider: str, base_url: str, model: str, key: Optional[str],
             content: object = [
                 {"type": "text", "text": prompt},
                 {"type": "image_url",
-                 "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                 "image_url": {"url": f"data:{_image_mime(image_bytes)};base64,{b64}"}},
             ]
         else:
             content = prompt
@@ -416,7 +421,7 @@ def _google_generate_once(model: str, prompt: str, max_tokens: int,
         kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
     config = types.GenerateContentConfig(**kwargs)
     if image_bytes:
-        image_part = types.Part.from_bytes(data=image_bytes, mime_type='image/png')
+        image_part = types.Part.from_bytes(data=image_bytes, mime_type=_image_mime(image_bytes))
         contents = [image_part, prompt]
     else:
         contents = prompt

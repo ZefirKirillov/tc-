@@ -37,7 +37,7 @@ RU_ERRORS = {
     "no_workout_today": "Сегодня отдых — тренировки нет.",
     "ai_failed": "❌ ИИ не ответил. Попробуй ещё раз.",
     "no_estimate": "Не получилось оценить калории — уточни описание или введи вручную.",
-    "photo_too_big": "Фото слишком большое (макс 5 МБ).",
+    "photo_too_big": "Фото слишком большое (макс 10 МБ).",
     "photo_bad": "Не получилось прочитать фото.",
     "bad_weight": "Вес: число от 20 до 400 кг.",
     "bad_fat": "Процент жира: число от 1 до 70.",
@@ -887,13 +887,21 @@ def _nutrition_json(nutrition: dict) -> dict:
                for k in ("protein", "fat", "carbs")}}
 
 
+# Phone photos are 2–8 MB; aiohttp's default 1 MB body limit rejected them outright.
+MAX_PHOTO_BYTES = 10 * 1024 * 1024
+MAX_UPLOAD_BYTES = MAX_PHOTO_BYTES + 256 * 1024  # room for multipart headers
+PHOTO_MAX_SIDE = 1600  # plenty for food/body analysis; keeps the AI request small
+
+
 async def _read_photo(request: web.Request):
-    """Multipart field "photo" → (PNG bytes, None) or (None, error code)."""
+    """Multipart field "photo" → (JPEG bytes, None) or (None, error code)."""
     import io
     try:
         post = await request.post()
+    except web.HTTPRequestEntityTooLarge:
+        return None, "photo_too_big"
     except Exception:
-        return None, "bad_json"
+        return None, "photo_bad"
     field = post.get("photo")
     if field is None:
         return None, "photo_bad"
@@ -903,17 +911,19 @@ async def _read_photo(request: web.Request):
         return None, "photo_bad"
     if not image_bytes:
         return None, "photo_bad"
-    if len(image_bytes) > 5 * 1024 * 1024:
+    if len(image_bytes) > MAX_PHOTO_BYTES:
         return None, "photo_too_big"
-    # Normalize to PNG (same as bot food.py) to keep model input stable.
+    # Downscale + JPEG: a full-size phone photo re-encoded as PNG is 15+ MB of base64,
+    # which the AI router rejects. exif_transpose keeps portrait shots upright.
     try:
-        from PIL import Image
-        image = Image.open(io.BytesIO(image_bytes))
+        from PIL import Image, ImageOps
+        image = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes)))
+        image.thumbnail((PHOTO_MAX_SIDE, PHOTO_MAX_SIDE))
         buf = io.BytesIO()
-        image.save(buf, format="PNG")
+        image.convert("RGB").save(buf, format="JPEG", quality=88)
         image_bytes = buf.getvalue()
     except Exception:
-        pass  # send raw bytes; model layer will fail gracefully → ai_failed
+        return None, "photo_bad"
     return image_bytes, None
 
 
@@ -1410,6 +1420,6 @@ def register_api_routes(app: web.Application) -> None:
 
 
 def create_api_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(client_max_size=MAX_UPLOAD_BYTES)
     register_api_routes(app)
     return app

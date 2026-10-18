@@ -6,7 +6,7 @@ import time
 from aiohttp import web
 
 from trackcheck.health import HOST, DEFAULT_PORT, healthz, index
-from trackcheck.web.api import register_api_routes
+from trackcheck.web.api import MAX_UPLOAD_BYTES, register_api_routes
 from trackcheck.web.static_serve import register_static
 
 
@@ -46,7 +46,7 @@ async def _watch_loop_lag():
 
 
 def create_web_app() -> web.Application:
-    app = web.Application(middlewares=[_timing])
+    app = web.Application(middlewares=[_timing], client_max_size=MAX_UPLOAD_BYTES)
     app.router.add_get("/healthz", healthz)
     app.router.add_get("/", index)
 

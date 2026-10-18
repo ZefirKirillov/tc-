@@ -105,7 +105,7 @@ export default function Diet() {
 
   async function onPhoto(file: File | undefined) {
     if (!file) return
-    if (file.size > 5 * 1024 * 1024) { b.setErr('Фото слишком большое (макс. 5 МБ).'); return }
+    if (file.size > 10 * 1024 * 1024) { b.setErr('Фото слишком большое (макс. 10 МБ).'); return }
     setPhotoBusy(true)
     b.clear()
     try {

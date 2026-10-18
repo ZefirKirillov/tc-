@@ -27,7 +27,7 @@ export default function BodySheet({ onClose, onSaved }: { onClose: () => void; o
 
   async function onPhoto(file: File | undefined) {
     if (!file) return
-    if (file.size > 5 * 1024 * 1024) { b.setErr('Фото слишком большое (макс. 5 МБ).'); return }
+    if (file.size > 10 * 1024 * 1024) { b.setErr('Фото слишком большое (макс. 10 МБ).'); return }
     setBusy(true)
     setPreview(URL.createObjectURL(file))
     b.clear()
