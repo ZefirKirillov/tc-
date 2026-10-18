@@ -1,0 +1,4 @@
+{"steps": [
+  {"say": "/start"}, {"press": "ws_start"}, {"press": "tz:Europe/Moscow:onboarding"},
+  {"say": "/timezone"}, {"press": "tz:Asia/Omsk:change"}, {"say": "/app"}, {"say": "/start"}
+]}

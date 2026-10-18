@@ -1,0 +1,100 @@
+{
+ "steps": [
+  {
+   "say": "/start"
+  },
+  {
+   "press": "ws_start"
+  },
+  {
+   "press": "tz:Europe/Moscow:onboarding"
+  },
+  {
+   "press": "menu_workouts"
+  },
+  {
+   "press": "menu_workout_add"
+  },
+  {
+   "press": "wp_mode_manual"
+  },
+  {
+   "ai": [
+    null,
+    null
+   ]
+  },
+  {
+   "say": "Понедельник: жим 3x8 60кг"
+  },
+  {
+   "ai": "{\"cycle_weeks\": 1, \"week_1\": {\"monday\": [{\"exercise\": \"Жим лёжа\", \"sets\": 3, \"reps\": \"8\", \"weight\": 60}], \"tuesday\": [{\"exercise\": \"Жим лёжа\", \"sets\": 3, \"reps\": \"8\", \"weight\": 60}], \"wednesday\": [{\"exercise\": \"Жим лёжа\", \"sets\": 3, \"reps\": \"8\", \"weight\": 60}], \"thursday\": [{\"exercise\": \"Жим лёжа\", \"sets\": 3, \"reps\": \"8\", \"weight\": 60}], \"friday\": [{\"exercise\": \"Жим лёжа\", \"sets\": 3, \"reps\": \"8\", \"weight\": 60}], \"saturday\": [{\"exercise\": \"Жим лёжа\", \"sets\": 3, \"reps\": \"8\", \"weight\": 60}]}}"
+  },
+  {
+   "press": "retry_ai:manual_plan"
+  },
+  {
+   "press": "wp_plan_accept"
+  },
+  {
+   "press": "ws_free_log"
+  },
+  {
+   "ai": "{\"exercises\": []}"
+  },
+  {
+   "say": "бегал"
+  },
+  {
+   "ai": "{\"exercises\": [{\"exercise\": \"Бег\", \"sets_done\": null, \"reps_done\": null, \"weight_done\": null, \"note\": \"5 км за 30 мин\"}]}"
+  },
+  {
+   "say": "бег 5 км за 30 мин"
+  },
+  {
+   "press": "menu_workouts"
+  },
+  {
+   "press": "workout_history"
+  },
+  {
+   "sql": [
+    "DELETE FROM ai_exercise_logs",
+    "DELETE FROM ai_workout_sessions"
+   ]
+  },
+  {
+   "press": "menu_workouts"
+  },
+  {
+   "press": "menu_workout_add"
+  },
+  {
+   "press": "ws_pick_day"
+  },
+  {
+   "press": "ws_day_xyz"
+  },
+  {
+   "press": "ws_day_monday"
+  },
+  {
+   "press": "ws_extra_cancel"
+  },
+  {
+   "press": "ws_pick_day"
+  },
+  {
+   "press": "ws_day_tuesday"
+  },
+  {
+   "press": "ws_start"
+  },
+  {
+   "press": "ws_ex_done"
+  },
+  {
+   "press": "ws_raise_keep"
+  }
+ ]
+}

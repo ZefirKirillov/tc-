@@ -1,0 +1,8 @@
+{"steps": [ {"say": "/start"}, {"press": "ws_start"}, {"press": "tz:Europe/Moscow:onboarding"},
+  {"sql": ["INSERT INTO ratings VALUES (42, 'еда', 9, '2026-10-18')", "INSERT INTO ratings VALUES (42, 'активность', 9, '2026-10-18')"]},
+  {"press": "menu_reflection"}, {"press": "refl:сон"}, {"press": "rate:9"},
+  {"press": "refl:зависание"}, {"press": "rate:8"},
+  {"press": "refl:настрой"}, {"ai": "{\"rating\": 10, \"response\": \"Супер!\"}"}, {"say": "Лучший день"},
+  {"press": "menu_reflection"},
+  {"press": "menu_rank"}, {"press": "nav_back"}
+]}

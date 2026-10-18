@@ -1,0 +1,12 @@
+{"steps": [ {"say": "/start"}, {"press": "ws_start"}, {"press": "tz:Europe/Moscow:onboarding"},
+  {"press": "menu_tasks"}, {"press": "task_new"}, {"say": "a"}, {"say": "Купить молоко"},
+  {"press": "task_type_once"}, {"press": "task_priority_yes"}, {"press": "task_deadline_yes"},
+  {"say": "32.13.2020"}, {"say": "01.01.2020"}, {"say": "01.01.2030"},
+  {"press": "task_new"}, {"say": "Зарядка"}, {"press": "task_type_repeat"},
+  {"press": "task_days_done"}, {"press": "task_day_0"}, {"press": "task_day_6"}, {"press": "task_day_3"}, {"press": "task_day_3"},
+  {"press": "task_days_done"}, {"press": "task_priority_no"}, {"press": "task_deadline_no"},
+  {"press": "task_done_2"}, {"press": "task_confirm_2"},
+  {"press": "nav_back"}, {"press": "back_to_main"},
+  {"press": "task_done_1"}, {"press": "task_confirm_1"},
+  {"press": "menu_tasks"}, {"press": "task_del_2"}, {"press": "task_noop"}
+]}

@@ -1,0 +1,13 @@
+{"steps": [ {"say": "/start"}, {"press": "ws_start"}, {"press": "tz:Europe/Moscow:onboarding"},
+  {"press": "menu_workouts"}, {"press": "menu_photo_analysis"}, {"say": "привет"},
+  {"press": "menu_photo_analysis"},
+  {"ai": "{\"score\": 7, \"summary\": \"Хорошая форма\", \"strengths\": [\"плечи\"], \"weaknesses\": [{\"spot\": \"пресс\", \"fix\": \"планка\"}]}"},
+  {"photo": "BODY1"}, {"press": "nav_back"},
+  {"press": "menu_ai"}, {"ai": "Пей больше воды."}, {"press": "ai_advice"},
+  {"say": "к"}, {"ai": "Да, можно."}, {"say": "Можно ли есть на ночь?"},
+  {"press": "show_last_ai"},
+  {"ai": null}, {"say": "Сколько спать?"}, {"ai": "8 часов."}, {"press": "retry_ai:ai_question"},
+  {"ai": null}, {"press": "ai_advice"}, {"ai": "Гуляй."}, {"press": "retry_ai:ai_advice"},
+  {"press": "nav_back"}, {"press": "menu_rank"}, {"press": "nav_back"},
+  {"press": "menu_stats"}, {"press": "stats:week"}, {"press": "stats:chart_week"}, {"press": "nav_back"}
+]}

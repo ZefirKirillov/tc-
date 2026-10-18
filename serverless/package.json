@@ -1,0 +1,15 @@
+{
+  "name": "trackcheck-serverless",
+  "private": true,
+  "devDependencies": {
+    "@tgcloud/cli": "^0.2.0"
+  },
+  "scripts": {
+    "build:miniapp": "npm --prefix ../miniapp run build:serverless",
+    "deploy": "npm run build:miniapp && tgcloud push",
+    "status": "tgcloud status",
+    "test": "node --no-warnings --test --import ./test/loader.mjs test/serverless.test.mjs test/api.test.mjs",
+    "compare": "for s in test/scenarios/*.json; do printf \"%-28s \" $(basename $s); case $s in */api.json) test/run_api.sh $s;; *) test/run.sh $s;; esac | tail -1 || exit 1; done"
+  },
+  "type": "module"
+}

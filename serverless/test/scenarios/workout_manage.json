@@ -1,0 +1,175 @@
+{
+ "steps": [
+  {
+   "say": "/start"
+  },
+  {
+   "press": "ws_start"
+  },
+  {
+   "press": "tz:Europe/Moscow:onboarding"
+  },
+  {
+   "press": "menu_workouts"
+  },
+  {
+   "press": "workout_manage"
+  },
+  {
+   "press": "w_cat_new"
+  },
+  {
+   "say": "Г"
+  },
+  {
+   "say": "Грудь"
+  },
+  {
+   "press": "cat_type_strength"
+  },
+  {
+   "press": "w_cat_new"
+  },
+  {
+   "say": "Кардио"
+  },
+  {
+   "press": "cat_type_cardio"
+  },
+  {
+   "press": "w_cat_new"
+  },
+  {
+   "say": "Грудь"
+  },
+  {
+   "press": "cat_type_strength"
+  },
+  {
+   "press": "w_manage_cat_1"
+  },
+  {
+   "press": "w_manage_exercises_1"
+  },
+  {
+   "press": "w_ex_new_1"
+  },
+  {
+   "say": "Жим"
+  },
+  {
+   "press": "goal_strength"
+  },
+  {
+   "say": "3x10 50 2.5"
+  },
+  {
+   "press": "w_manage_ex_1"
+  },
+  {
+   "press": "w_ex_rename_1"
+  },
+  {
+   "say": "Жим лёжа"
+  },
+  {
+   "press": "w_manage_cat_2"
+  },
+  {
+   "press": "w_manage_exercises_2"
+  },
+  {
+   "press": "w_ex_new_2"
+  },
+  {
+   "say": "Бег"
+  },
+  {
+   "press": "goal_cardio"
+  },
+  {
+   "say": "5"
+  },
+  {
+   "say": "5 30"
+  },
+  {
+   "press": "workout_add"
+  },
+  {
+   "press": "w_add_cat_1"
+  },
+  {
+   "press": "w_add_ex_1"
+  },
+  {
+   "press": "w_manual_1"
+  },
+  {
+   "say": "x"
+  },
+  {
+   "say": "10 10 8"
+  },
+  {
+   "say": "x"
+  },
+  {
+   "say": "52,5"
+  },
+  {
+   "press": "w_show_goal_1"
+  },
+  {
+   "press": "w_continue_yes"
+  },
+  {
+   "press": "w_add_cat_2"
+  },
+  {
+   "press": "w_add_ex_2"
+  },
+  {
+   "press": "w_achieve_goal_2"
+  },
+  {
+   "press": "w_continue_yes"
+  },
+  {
+   "press": "w_add_cat_2"
+  },
+  {
+   "press": "w_add_ex_2"
+  },
+  {
+   "press": "w_manual_2"
+  },
+  {
+   "say": "-"
+  },
+  {
+   "say": "25"
+  },
+  {
+   "press": "workout_main"
+  },
+  {
+   "press": "workout_history"
+  },
+  {
+   "press": "history_next"
+  },
+  {
+   "press": "w_cat_rename_2"
+  },
+  {
+   "say": "Бег и вело"
+  },
+  {
+   "press": "w_cat_delete_2"
+  },
+  {
+   "press": "w_cat_delete_yes"
+  }
+ ]
+}

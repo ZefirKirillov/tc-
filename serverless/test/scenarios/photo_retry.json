@@ -1,0 +1,106 @@
+{
+ "steps": [
+  {
+   "say": "/start"
+  },
+  {
+   "press": "ws_start"
+  },
+  {
+   "press": "tz:Europe/Moscow:onboarding"
+  },
+  {
+   "press": "menu_workouts"
+  },
+  {
+   "press": "menu_photo_analysis"
+  },
+  {
+   "press": "photo_analysis_back"
+  },
+  {
+   "press": "menu_diet"
+  },
+  {
+   "say": "80"
+  },
+  {
+   "say": "180"
+  },
+  {
+   "say": "30"
+  },
+  {
+   "press": "gender_male"
+  },
+  {
+   "press": "activity_1.2"
+  },
+  {
+   "press": "goal_gain"
+  },
+  {
+   "say": "200"
+  },
+  {
+   "say": "4"
+  },
+  {
+   "say": "10"
+  },
+  {
+   "say": "100"
+  },
+  {
+   "press": "diet_confirm"
+  },
+  {
+   "press": "diet_food"
+  },
+  {
+   "press": "meal_type:Обед"
+  },
+  {
+   "ai": null
+  },
+  {
+   "photo": "FOOD2"
+  },
+  {
+   "ai": "салат"
+  },
+  {
+   "press": "retry_ai:food_photo"
+  },
+  {
+   "ai": "салат цезарь 520 30 35 20"
+  },
+  {
+   "press": "retry_ai:food_photo"
+  },
+  {
+   "press": "food_confirm_yes"
+  },
+  {
+   "press": "diet_food"
+  },
+  {
+   "press": "meal_type:Ужин"
+  },
+  {
+   "ai": "непонятно"
+  },
+  {
+   "photo": "FOOD3"
+  },
+  {
+   "say": "400"
+  },
+  {
+   "press": "save_food_yes"
+  },
+  {
+   "say": "Ужин дома"
+  }
+ ]
+}

@@ -1,0 +1,9 @@
+{
+  // The Mini App (miniapp/, built with `npm run build:serverless` there) is hosted
+  // next to the bot. `npm run deploy` builds it and pushes everything.
+  "static": {
+    "source": "dist",
+    "spa": true
+  },
+  "$schema": "./node_modules/@tgcloud/cli/schema/tgcloud.json"
+}

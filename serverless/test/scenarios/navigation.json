@@ -1,0 +1,8 @@
+{"steps": [ {"say": "/start"}, {"press": "ws_start"}, {"press": "tz:Europe/Moscow:onboarding"},
+  {"press": "menu_workouts"}, {"press": "menu_workout_add"}, {"press": "wp_mode_ai"}, {"press": "wp_goal_strength"},
+  {"press": "nav_back"}, {"press": "nav_back"}, {"press": "nav_back"}, {"press": "nav_back"}, {"press": "nav_back"},
+  {"press": "menu_diet"}, {"say": "🔙 Назад"},
+  {"press": "menu_tasks"}, {"press": "task_new"}, {"press": "nav_back"}, {"press": "nav_back"},
+  {"press": "menu_ai"}, {"press": "nav_back"},
+  {"press": "menu_reflection"}, {"press": "refl:сон"}, {"press": "nav_back"}, {"press": "nav_back"}
+]}

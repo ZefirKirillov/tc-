@@ -1,0 +1,8 @@
+{"steps": [ {"say": "/start"}, {"press": "ws_start"}, {"press": "tz:Europe/Moscow:onboarding"},
+  {"press": "menu_reflection"}, {"press": "refl:настрой"},
+  {"ai": null}, {"say": "Так себе день"},
+  {"ai": "{\"rating\": 4, \"response\": \"Держись, Тест.\"}"}, {"press": "retry_ai:mood"},
+  {"press": "refl:сон"}, {"press": "rate:1"},
+  {"ai": null}, {"press": "analyze_low:сон"},
+  {"ai": "Ложись раньше."}, {"press": "retry_ai:low_rating"}
+]}

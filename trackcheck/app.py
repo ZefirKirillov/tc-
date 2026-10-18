@@ -1,4 +1,5 @@
 import asyncio
+import os
 import signal
 from zoneinfo import ZoneInfo
 
@@ -35,8 +36,19 @@ async def setup_bot_entry_points(bot: Bot):
         print(f"[BOOT] Не удалось установить кнопку меню/команды: {e}")
 
 
+# BOT_MODE:
+#   polling (default) — the whole bot here: Telegram polling, scheduler, Mini App, API.
+#   worker            — the bot's handlers run on Telegram Serverless (serverless/);
+#                       this process keeps the scheduled jobs and the AI/chart relay.
+#   relay             — only the AI/chart relay (a test service for the serverless bot).
+BOT_MODE = os.getenv("BOT_MODE", "polling").strip().lower()
+
+
 async def main():
-    print("[BOOT] Старт...")
+    print(f"[BOOT] Старт... (BOT_MODE={BOT_MODE})")
+    if BOT_MODE == "relay":
+        await _run_until_signal(await start_web_server())
+        return
     init_db()
     print("[BOOT] База инициализирована")
     log_db_persistence_diagnostics()
@@ -48,7 +60,9 @@ async def main():
 
     bot = Bot(token=BOT_TOKEN)
     print("[BOOT] Бот создан")
-    await setup_bot_entry_points(bot)
+    if BOT_MODE == "polling":
+        # In worker mode the serverless bot owns the menu button and commands.
+        await setup_bot_entry_points(bot)
 
     scheduler = AsyncIOScheduler()
     for _, tz_name in RUSSIAN_TIMEZONES:
@@ -88,11 +102,15 @@ async def main():
 
     health_runner = await start_web_server()
 
-    await bot.delete_webhook(drop_pending_updates=True)
-    print("[BOOT] Webhook удалён")
-
-    polling_task = asyncio.create_task(dp.start_polling(bot))
-    print("[BOOT] Polling запущен")
+    polling_task = None
+    if BOT_MODE == "polling":
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("[BOOT] Webhook удалён")
+        polling_task = asyncio.create_task(dp.start_polling(bot))
+        print("[BOOT] Polling запущен")
+    else:
+        # The webhook belongs to Telegram Serverless — never delete it here.
+        print("[BOOT] Worker: polling выключен, работают планировщик и relay")
 
     stop_signal = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -105,11 +123,12 @@ async def main():
     await stop_signal.wait()
     print("Получен сигнал остановки...")
 
-    polling_task.cancel()
-    try:
-        await asyncio.gather(polling_task, return_exceptions=True)
-    except asyncio.CancelledError:
-        pass
+    if polling_task:
+        polling_task.cancel()
+        try:
+            await asyncio.gather(polling_task, return_exceptions=True)
+        except asyncio.CancelledError:
+            pass
 
     await health_runner.cleanup()
     await bot.session.close()
@@ -117,3 +136,15 @@ async def main():
     if scheduler:
         scheduler.shutdown()
     print("Бот остановлен")
+
+
+async def _run_until_signal(runner):
+    stop_signal = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop_signal.set)
+        except (NotImplementedError, AttributeError):
+            signal.signal(sig, lambda *_: stop_signal.set())
+    await stop_signal.wait()
+    await runner.cleanup()

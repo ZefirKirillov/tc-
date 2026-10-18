@@ -1,0 +1,707 @@
+[
+ {
+  "method": "GET",
+  "path": "/api/me"
+ },
+ {
+  "method": "GET",
+  "path": "/api/ratings"
+ },
+ {
+  "method": "POST",
+  "path": "/api/ratings",
+  "body": {
+   "category": "сон",
+   "rating": "7"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/ratings",
+  "body": {
+   "category": "сон",
+   "rating": "x"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/ratings",
+  "body": {
+   "category": "еда",
+   "rating": 5
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/ratings",
+  "body": {
+   "category": "бег",
+   "rating": 5
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/tasks",
+  "body": {
+   "title": "  "
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/tasks",
+  "body": {
+   "title": "A",
+   "deadline": "2030-13-01"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/tasks",
+  "body": {
+   "title": "Задача",
+   "is_priority": true,
+   "deadline": "2030-01-01",
+   "repeat_days": [
+    0,
+    7,
+    "3"
+   ]
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/tasks",
+  "body": {
+   "title": "Вторая",
+   "repeat_days": "1, 2,9"
+  }
+ },
+ {
+  "method": "GET",
+  "path": "/api/tasks"
+ },
+ {
+  "method": "POST",
+  "path": "/api/tasks/1/done",
+  "body": {}
+ },
+ {
+  "method": "POST",
+  "path": "/api/tasks/x/done",
+  "body": {}
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/tasks/2"
+ },
+ {
+  "method": "GET",
+  "path": "/api/tasks"
+ },
+ {
+  "method": "GET",
+  "path": "/api/diet"
+ },
+ {
+  "method": "POST",
+  "path": "/api/diet/estimate",
+  "body": {
+   "description": "суп"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/diet/profile",
+  "body": {
+   "weight": 80,
+   "height": 180,
+   "age": 30,
+   "gender": "male",
+   "activity": 1.55,
+   "goal": "loss",
+   "change": 5,
+   "days": 90,
+   "preview": true
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/diet/profile",
+  "body": {
+   "weight": 80,
+   "height": 180,
+   "age": 30,
+   "gender": "male",
+   "activity": 1.5,
+   "goal": "loss"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/diet/profile",
+  "body": {
+   "weight": 80,
+   "height": 180,
+   "age": 30,
+   "gender": "male",
+   "activity": 1.55,
+   "goal": "gain",
+   "change": 200,
+   "days": 90
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/diet/profile",
+  "body": {
+   "weight": "80",
+   "height": 180,
+   "age": "30",
+   "gender": "female",
+   "activity": 1.2,
+   "goal": "maintain"
+  }
+ },
+ {
+  "ai": "450 35 12 50"
+ },
+ {
+  "method": "POST",
+  "path": "/api/diet/estimate",
+  "body": {
+   "description": "гречка с курицей"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/diet/estimate",
+  "body": {
+   "description": "а"
+  }
+ },
+ {
+  "ai": "не знаю"
+ },
+ {
+  "method": "POST",
+  "path": "/api/diet/estimate",
+  "body": {
+   "description": "что-то"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/diet/log",
+  "body": {
+   "description": "гречка",
+   "calories": 450,
+   "protein": 35,
+   "fat": 12,
+   "carbs": 50,
+   "meal": "Обед"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/diet/log",
+  "body": {
+   "description": "суп",
+   "calories": "300"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/diet/log",
+  "body": {
+   "description": "суп",
+   "calories": 300,
+   "protein": 5
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/diet/log",
+  "body": {
+   "description": "",
+   "calories": 300
+  }
+ },
+ {
+  "method": "GET",
+  "path": "/api/diet"
+ },
+ {
+  "method": "GET",
+  "path": "/api/diet/history"
+ },
+ {
+  "ai": "омлет с сыром 350 22 27 3"
+ },
+ {
+  "method": "POST",
+  "path": "/api/diet/photo",
+  "photo": true
+ },
+ {
+  "ai": "что-то непонятное"
+ },
+ {
+  "method": "POST",
+  "path": "/api/diet/photo",
+  "photo": true
+ },
+ {
+  "method": "POST",
+  "path": "/api/body",
+  "body": {}
+ },
+ {
+  "method": "POST",
+  "path": "/api/body",
+  "body": {
+   "weight": 500
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/body",
+  "body": {
+   "weight": 79.5,
+   "body_fat": "18"
+  }
+ },
+ {
+  "method": "GET",
+  "path": "/api/body"
+ },
+ {
+  "method": "GET",
+  "path": "/api/body/score"
+ },
+ {
+  "ai": "{\"score\": 7.4, \"summary\": \"ok\", \"strengths\": [\"a\",\"\",\"b\",\"c\",\"d\"], \"weaknesses\": [\"x\", {\"spot\": \"y\", \"fix\": \"z\"}]}"
+ },
+ {
+  "method": "POST",
+  "path": "/api/body/score",
+  "photo": true
+ },
+ {
+  "ai": "{\"error\": \"no_body\"}"
+ },
+ {
+  "method": "POST",
+  "path": "/api/body/score",
+  "photo": true
+ },
+ {
+  "method": "GET",
+  "path": "/api/body/score"
+ },
+ {
+  "method": "GET",
+  "path": "/api/workout"
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/start",
+  "body": {}
+ },
+ {
+  "ai": "{\"cycle_weeks\": 1, \"week_1\": {\"monday\": [{\"exercise\": \"Жим\", \"sets\": 3, \"reps\": \"8\", \"weight\": 60}, {\"exercise\": \"Тяга\", \"sets\": 3, \"reps\": \"10\", \"weight\": null}], \"tuesday\": [{\"exercise\": \"Жим\", \"sets\": 3, \"reps\": \"8\", \"weight\": 60}, {\"exercise\": \"Тяга\", \"sets\": 3, \"reps\": \"10\", \"weight\": null}], \"wednesday\": [{\"exercise\": \"Жим\", \"sets\": 3, \"reps\": \"8\", \"weight\": 60}, {\"exercise\": \"Тяга\", \"sets\": 3, \"reps\": \"10\", \"weight\": null}], \"thursday\": [{\"exercise\": \"Жим\", \"sets\": 3, \"reps\": \"8\", \"weight\": 60}, {\"exercise\": \"Тяга\", \"sets\": 3, \"reps\": \"10\", \"weight\": null}], \"friday\": [{\"exercise\": \"Жим\", \"sets\": 3, \"reps\": \"8\", \"weight\": 60}, {\"exercise\": \"Тяга\", \"sets\": 3, \"reps\": \"10\", \"weight\": null}], \"saturday\": [{\"exercise\": \"Жим\", \"sets\": 3, \"reps\": \"8\", \"weight\": 60}, {\"exercise\": \"Тяга\", \"sets\": 3, \"reps\": \"10\", \"weight\": null}], \"sunday\": [{\"exercise\": \"Жим\", \"sets\": 3, \"reps\": \"8\", \"weight\": 60}, {\"exercise\": \"Тяга\", \"sets\": 3, \"reps\": \"10\", \"weight\": null}]}}"
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/generate",
+  "body": {
+   "goal": "Сила",
+   "level": "Средний",
+   "days": 3
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/generate",
+  "body": {
+   "goal": "Сила",
+   "level": "Средний",
+   "days": 9
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/plan",
+  "body": {
+   "plan": {
+    "cycle_weeks": 1,
+    "week_1": {
+     "monday": [
+      {
+       "exercise": "Жим",
+       "sets": 3,
+       "reps": "8",
+       "weight": 60
+      },
+      {
+       "exercise": "Тяга",
+       "sets": 3,
+       "reps": "10",
+       "weight": null
+      }
+     ],
+     "tuesday": [
+      {
+       "exercise": "Жим",
+       "sets": 3,
+       "reps": "8",
+       "weight": 60
+      },
+      {
+       "exercise": "Тяга",
+       "sets": 3,
+       "reps": "10",
+       "weight": null
+      }
+     ],
+     "wednesday": [
+      {
+       "exercise": "Жим",
+       "sets": 3,
+       "reps": "8",
+       "weight": 60
+      },
+      {
+       "exercise": "Тяга",
+       "sets": 3,
+       "reps": "10",
+       "weight": null
+      }
+     ],
+     "thursday": [
+      {
+       "exercise": "Жим",
+       "sets": 3,
+       "reps": "8",
+       "weight": 60
+      },
+      {
+       "exercise": "Тяга",
+       "sets": 3,
+       "reps": "10",
+       "weight": null
+      }
+     ],
+     "friday": [
+      {
+       "exercise": "Жим",
+       "sets": 3,
+       "reps": "8",
+       "weight": 60
+      },
+      {
+       "exercise": "Тяга",
+       "sets": 3,
+       "reps": "10",
+       "weight": null
+      }
+     ],
+     "saturday": [
+      {
+       "exercise": "Жим",
+       "sets": 3,
+       "reps": "8",
+       "weight": 60
+      },
+      {
+       "exercise": "Тяга",
+       "sets": 3,
+       "reps": "10",
+       "weight": null
+      }
+     ],
+     "sunday": [
+      {
+       "exercise": "Жим",
+       "sets": 3,
+       "reps": "8",
+       "weight": 60
+      },
+      {
+       "exercise": "Тяга",
+       "sets": 3,
+       "reps": "10",
+       "weight": null
+      }
+     ]
+    }
+   },
+   "mode": "ai",
+   "goal": "Сила",
+   "level": "Средний",
+   "days": "3"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/plan",
+  "body": {
+   "plan": []
+  }
+ },
+ {
+  "method": "GET",
+  "path": "/api/workout"
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/start",
+  "body": {}
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/log",
+  "body": {
+   "session_id": 1,
+   "exercise": {
+    "exercise": "Жим",
+    "sets": 3,
+    "reps": "8",
+    "weight": 60
+   },
+   "action": "done"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/log",
+  "body": {
+   "session_id": 99,
+   "exercise": {
+    "exercise": "Жим"
+   },
+   "action": "done"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/log",
+  "body": {
+   "session_id": 1,
+   "exercise": {
+    "exercise": "Жим"
+   },
+   "action": "jump"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/undo",
+  "body": {
+   "session_id": 1,
+   "exercise": {
+    "exercise": "Жим"
+   }
+  }
+ },
+ {
+  "ai": "{\"sets_done\": 3, \"reps_done\": \"10\", \"weight_done\": 60, \"completed\": true, \"note\": null}"
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/log-text",
+  "body": {
+   "session_id": 1,
+   "exercise": {
+    "exercise": "Жим",
+    "sets": 3,
+    "reps": "8",
+    "weight": 60
+   },
+   "text": "3x10 60"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/raise",
+  "body": {
+   "target": {
+    "kind": "plan",
+    "name": "Жим",
+    "weight": 60
+   },
+   "increment": "2,5"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/raise",
+  "body": {
+   "target": {
+    "kind": "sub",
+    "weight": 60
+   },
+   "increment": 2
+  }
+ },
+ {
+  "method": "GET",
+  "path": "/api/workout/substitutions?exercise=%D0%A2%D1%8F%D0%B3%D0%B0"
+ },
+ {
+  "ai": "{\"exercises\": [{\"exercise\": \"Тяга гантели\", \"sets_done\": 3, \"reps_done\": \"12\", \"weight_done\": 20, \"note\": null}]}"
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/replace",
+  "body": {
+   "session_id": 1,
+   "exercise": {
+    "exercise": "Тяга",
+    "sets": 3,
+    "reps": "10",
+    "weight": null
+   },
+   "text": "тяга гантели 3x12 20"
+  }
+ },
+ {
+  "method": "GET",
+  "path": "/api/workout/substitutions?exercise=%D0%A2%D1%8F%D0%B3%D0%B0"
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/replace",
+  "body": {
+   "session_id": 1,
+   "exercise": {
+    "exercise": "Тяга"
+   },
+   "sub_id": 1
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/finish",
+  "body": {
+   "session_id": 1
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/finish",
+  "body": {
+   "session_id": 1
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/extra",
+  "body": {
+   "day": "monday"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/extra/cancel",
+  "body": {}
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/free",
+  "body": {
+   "text": "бег"
+  }
+ },
+ {
+  "method": "GET",
+  "path": "/api/workout/history?limit=x"
+ },
+ {
+  "method": "GET",
+  "path": "/api/workout"
+ },
+ {
+  "ai": "{\"cycle_weeks\": 1, \"week_1\": {\"monday\": [{\"exercise\": \"Присед\", \"sets\": 5, \"reps\": \"5\", \"weight\": 100}]}}"
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/parse-plan",
+  "body": {
+   "text": "Понедельник: присед 5x5 100"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/parse-plan",
+  "body": {
+   "text": "коротко"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/apply-review",
+  "body": {
+   "accepted": [
+    {
+     "week": "week_1",
+     "day": "monday",
+     "old_exercise": "Жим",
+     "new_exercise": "Жим гантелей"
+    }
+   ]
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/workout/apply-review",
+  "body": {
+   "accepted": []
+  }
+ },
+ {
+  "ai": "**Да**, можно."
+ },
+ {
+  "method": "POST",
+  "path": "/api/ai/ask",
+  "body": {
+   "question": "Можно ли есть на ночь?"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/ai/ask",
+  "body": {
+   "question": "а"
+  }
+ },
+ {
+  "method": "POST",
+  "path": "/api/ai/advice",
+  "body": {}
+ },
+ {
+  "method": "GET",
+  "path": "/api/ai/last"
+ },
+ {
+  "ai": null
+ },
+ {
+  "method": "POST",
+  "path": "/api/ai/advice",
+  "body": {}
+ },
+ {
+  "method": "GET",
+  "path": "/api/stats?days=7"
+ },
+ {
+  "method": "GET",
+  "path": "/api/stats?days=99"
+ },
+ {
+  "method": "GET",
+  "path": "/api/me"
+ }
+]

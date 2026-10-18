@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build --outDir ../trackcheck/web/static --emptyOutDir",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:serverless": "tsc --noEmit && VITE_BACKEND=serverless vite build --outDir ../serverless/dist --emptyOutDir"
   },
   "dependencies": {
     "@twa-dev/sdk": "^8.0.2",

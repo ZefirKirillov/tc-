@@ -28,7 +28,59 @@ export class ApiError extends Error {
   }
 }
 
+// Built with VITE_BACKEND=serverless the app runs on Telegram Serverless: the same
+// requests go through Telegram.WebApp.Serverless.call('api', …) (see
+// serverless/tgcloud/endpoints/api.js) instead of fetch() to the Render server.
+const SERVERLESS = import.meta.env.VITE_BACKEND === 'serverless'
+
+function callServerless(method: string, path: string, body?: unknown): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const sv = tg?.Serverless
+    if (!sv?.call) {
+      reject(new ApiError('unauthorized', FALLBACK.unauthorized))
+      return
+    }
+    sv.call('api', { method, path, body }, (err: any, result: any) => {
+      if (err) {
+        reject(err.type === 'NETWORK' || !err.type
+          ? new ApiError('network', 'Нет соединения. Проверь интернет и попробуй ещё раз.')
+          : fail({ error: err.type?.toLowerCase(), message: err.message }, 500))
+        return
+      }
+      const res = result ?? { status: 500, body: {} }
+      if (res.status >= 400 || !res.body?.ok) reject(fail(res.body ?? {}, res.status))
+      else resolve(res.body.data)
+    })
+  })
+}
+
+/** Downscale to 1600 px JPEG in the browser — the API takes the photo as base64. */
+async function photoBase64(file: File): Promise<string> {
+  const MAX_SIDE = 1600
+  let src: ImageBitmap | HTMLImageElement
+  try {
+    src = await createImageBitmap(file, { imageOrientation: 'from-image' } as ImageBitmapOptions)
+  } catch {
+    src = await new Promise<HTMLImageElement>((ok, bad) => {
+      const img = new Image()
+      img.onload = () => ok(img)
+      img.onerror = () => bad(new ApiError('photo_bad', 'Не получилось прочитать фото.'))
+      img.src = URL.createObjectURL(file)
+    })
+  }
+  const scale = Math.min(1, MAX_SIDE / Math.max(src.width, src.height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(src.width * scale)
+  canvas.height = Math.round(src.height * scale)
+  canvas.getContext('2d')!.drawImage(src, 0, 0, canvas.width, canvas.height)
+  return canvas.toDataURL('image/jpeg', 0.88).split(',')[1]
+}
+
 async function req(path: string, opts: RequestInit = {}) {
+  if (SERVERLESS) {
+    const body = typeof opts.body === 'string' ? JSON.parse(opts.body) : undefined
+    return callServerless(opts.method ?? 'GET', path, body)
+  }
   let res: Response
   try {
     res = await fetch(path, {
@@ -45,6 +97,7 @@ async function req(path: string, opts: RequestInit = {}) {
 
 // Multipart photo upload (auth via header, not body).
 async function reqPhoto(path: string, file: File) {
+  if (SERVERLESS) return callServerless('POST', path, { photo_b64: await photoBase64(file) })
   const form = new FormData()
   form.append('photo', file)
   let res: Response
@@ -65,6 +118,12 @@ async function reqPhoto(path: string, file: File) {
 // Streaming AI answer (NDJSON, one event per line). Calls onText with the
 // whole answer so far; resolves with the final answer.
 async function reqStream(path: string, body: unknown, onText: (text: string) => void): Promise<string> {
+  if (SERVERLESS) {
+    // Serverless.call returns one response — the answer arrives whole.
+    const { answer } = await callServerless('POST', path.split('?')[0], body)
+    onText(answer)
+    return answer
+  }
   let res: Response
   try {
     res = await fetch(path, {

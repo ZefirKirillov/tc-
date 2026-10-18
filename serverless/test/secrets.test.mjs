@@ -1,0 +1,5 @@
+export const TURSO_DATABASE_URL = 'libsql://test.turso.local'
+export const TURSO_AUTH_TOKEN = 'test-token'
+export const RELAY_URL = 'https://relay.test.local'
+export const RELAY_SECRET = 'relay-secret'
+export const MINIAPP_BASE_URL = 'https://app123.tgcloud.ai'

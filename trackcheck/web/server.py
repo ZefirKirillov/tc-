@@ -7,6 +7,7 @@ from aiohttp import web
 
 from trackcheck.health import HOST, DEFAULT_PORT, healthz, index
 from trackcheck.web.api import MAX_UPLOAD_BYTES, register_api_routes
+from trackcheck.web.relay import register_relay_routes
 from trackcheck.web.static_serve import register_static
 
 
@@ -51,6 +52,7 @@ def create_web_app() -> web.Application:
     app.router.add_get("/", index)
 
     register_api_routes(app)
+    register_relay_routes(app)
 
     register_static(app)  # /app static + SPA fallback, registered last
     return app

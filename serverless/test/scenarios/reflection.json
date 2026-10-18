@@ -1,0 +1,10 @@
+{"steps": [ {"say": "/start"}, {"press": "ws_start"}, {"press": "tz:Europe/Moscow:onboarding"},
+  {"press": "menu_reflection"}, {"press": "refl:сон"}, {"press": "rate:7"},
+  {"press": "refl:зависание"}, {"press": "rate:2"},
+  {"ai": "Тест, попробуй меньше залипать в телефон."}, {"press": "analyze_low:зависание"},
+  {"press": "skip_analysis"},
+  {"press": "refl:настрой"}, {"say": "ok"}, {"say": "День был хороший, много успел"},
+  {"ai": "{\"rating\": 8, \"response\": \"Здорово, Тест!\"}"},
+  {"say": "Отличный день, всё получилось"},
+  {"press": "nav_back"}, {"press": "menu_reflection"}
+]}

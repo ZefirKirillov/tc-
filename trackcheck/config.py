@@ -28,7 +28,10 @@ def _miniapp_build_id() -> str:
 
 
 _BUILD_ID = _miniapp_build_id()
-MINIAPP_URL = f"{MINIAPP_BASE_URL.rstrip('/')}/app" + (f"?v={_BUILD_ID}" if _BUILD_ID else "")
+# MINIAPP_URL overrides the whole link — e.g. https://app<id>.tgcloud.ai/ when the
+# Mini App is hosted by Telegram Serverless (BOT_MODE=worker).
+MINIAPP_URL = os.getenv("MINIAPP_URL") or (
+    f"{MINIAPP_BASE_URL.rstrip('/')}/app" + (f"?v={_BUILD_ID}" if _BUILD_ID else ""))
 
 
 def miniapp_url(tab: str = "") -> str:
