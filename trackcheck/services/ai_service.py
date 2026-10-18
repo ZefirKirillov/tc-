@@ -745,7 +745,8 @@ def analyze_food_photo(image_bytes: bytes, prompt: str) -> Optional[str]:
     if not _nara_api_key() and not _google_api_key():
         return None
     try:
-        return _generate_text(prompt, 256, image_bytes=image_bytes)
+        # think_off: на gemini-3.x мысли съедают лимит токенов и обрывают ответ.
+        return _generate_text(prompt, 512, image_bytes=image_bytes, think_off=True)
     except Exception as e:
         import traceback
         print(f"[FOOD PHOTO] Ошибка: {e}")
@@ -759,7 +760,8 @@ def analyze_body_photo(image_bytes: bytes, prompt: str, max_tokens: int = 2048) 
         return None
     if not _nara_api_key() and not _google_api_key():
         return None
-    return _generate_text(prompt, max_tokens, image_bytes=image_bytes)
+    # think_off: иначе мысли съедают max_tokens и JSON обрывается на середине.
+    return _generate_text(prompt, max_tokens, image_bytes=image_bytes, think_off=True)
 
 
 

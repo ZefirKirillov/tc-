@@ -45,7 +45,7 @@ def parse_body_score(text: Optional[str]) -> Optional[dict]:
 def rate_body_photo(image_bytes: bytes) -> Optional[dict]:
     """ИИ-оценка фото (медленно — вызывать в потоке). None — ИИ не ответил."""
     from trackcheck.services.ai_service import analyze_body_photo
-    return parse_body_score(analyze_body_photo(image_bytes, BODY_SCORE_PROMPT, max_tokens=1024))
+    return parse_body_score(analyze_body_photo(image_bytes, BODY_SCORE_PROMPT, max_tokens=2048))
 
 
 def format_body_score(result: dict) -> str:
