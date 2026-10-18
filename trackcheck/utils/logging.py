@@ -69,5 +69,7 @@ def log_ratings_ai_diagnostics():
               f"model={os.environ.get('NARA_MODEL', 'ling-3.0-flash-vl-free')}")
         print("[AI] Каждый ИИ-вызов логируется строкой [AI-ROUTE] "
               "(caller/provider/model/reason); детали — в строках [ATRIA]/[NARA]/[GEMINI].")
+        if os.environ.get("GIGACHAT_AUTH_KEY") or os.environ.get("GIGACHAT_CREDENTIALS"):
+            print(f"[AI] GigaChat (только фото): model={os.environ.get('GIGACHAT_MODEL', 'GigaChat-2-Max')}")
         print("[AI] Fallback-цепочка: Atria (только текст, если задан ATRIA_API_KEY) → "
-              "NaraRouter → Google (GOOGLE_API_KEY, если задан).")
+              "GigaChat (только фото, если задан GIGACHAT_AUTH_KEY) → NaraRouter → Google (GOOGLE_API_KEY, если задан).")

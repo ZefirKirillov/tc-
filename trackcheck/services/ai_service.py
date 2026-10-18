@@ -3,8 +3,12 @@ import inspect
 import json
 import os
 import re
+import ssl
+import threading
 import time
+import urllib.parse
 import urllib.request
+import uuid
 from typing import Optional
 
 try:
@@ -38,6 +42,17 @@ ATRIA_TIMEOUT = float(os.environ.get("ATRIA_TIMEOUT", "180"))
 
 NARA_BASE_URL = os.environ.get("NARA_BASE_URL", "https://router.bynara.id/v1").rstrip("/")
 NARA_MODEL = os.environ.get("NARA_MODEL", "ling-3.0-flash-vl-free")
+# GigaChat (Сбер) — первичный провайдер только для фото (бесплатный Freemium).
+# Текстовые запросы сюда не идут. Ключ авторизации — GIGACHAT_AUTH_KEY
+# (Basic-ключ из личного кабинета developers.sber.ru).
+GIGACHAT_AUTH_URL = os.environ.get("GIGACHAT_AUTH_URL", "https://ngw.devices.sberbank.ru:9443/api/v2/oauth")
+GIGACHAT_BASE_URL = os.environ.get("GIGACHAT_BASE_URL", "https://gigachat.devices.sberbank.ru/api/v1").rstrip("/")
+GIGACHAT_MODEL = os.environ.get("GIGACHAT_MODEL", "GigaChat-2-Max")
+GIGACHAT_SCOPE = os.environ.get("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
+GIGACHAT_TIMEOUT = float(os.environ.get("GIGACHAT_TIMEOUT", "120"))
+# Серверы GigaChat подписаны Russian Trusted Root CA (Минцифры), которого нет
+# в стандартных хранилищах — проверяем TLS по вложенному сертификату.
+_GIGACHAT_CA = os.path.join(os.path.dirname(__file__), "certs", "russian_trusted_ca.pem")
 GOOGLE_MODEL = os.environ.get("GOOGLE_MODEL", "gemini-3.6-flash")
 # Запасные модели Google при 503/overload на основной (по порядку).
 GOOGLE_FALLBACK_MODELS = [
@@ -71,9 +86,15 @@ def _atria_api_key(ratings: bool = False) -> Optional[str]:
     return os.environ.get("ATRIA_API_KEY")
 
 
+def _gigachat_api_key() -> Optional[str]:
+    return os.environ.get("GIGACHAT_AUTH_KEY") or os.environ.get("GIGACHAT_CREDENTIALS")
+
+
 def _has_any_key(ratings: bool = False, image: bool = False) -> bool:
-    """Есть ли хоть один провайдер для запроса. Atria не принимает картинки."""
+    """Есть ли хоть один провайдер для запроса. Atria не принимает картинки,
+    GigaChat используется только для картинок."""
     return bool((not image and _atria_api_key(ratings))
+                or (image and _gigachat_api_key())
                 or _nara_api_key(ratings) or _google_api_key(ratings))
 
 
@@ -234,6 +255,121 @@ def _atria_chat(prompt: str, max_tokens: int,
     return _openai_chat("atria", ATRIA_BASE_URL, ATRIA_MODEL, key,
                         prompt, max(max_tokens, ATRIA_MIN_TOKENS),
                         extra=extra, timeout=ATRIA_TIMEOUT)
+
+
+_gigachat_token: dict = {"value": None, "expires_at": 0.0}
+_gigachat_token_lock = threading.Lock()
+
+
+def _gigachat_ssl() -> ssl.SSLContext:
+    return ssl.create_default_context(cafile=_GIGACHAT_CA)
+
+
+def _gigachat_access_token(key: str) -> str:
+    """OAuth-токен GigaChat (живёт 30 мин). Кешируем и обновляем за минуту до истечения."""
+    with _gigachat_token_lock:
+        if _gigachat_token["value"] and time.time() < _gigachat_token["expires_at"] - 60:
+            return _gigachat_token["value"]
+        req = urllib.request.Request(
+            GIGACHAT_AUTH_URL,
+            data=urllib.parse.urlencode({"scope": GIGACHAT_SCOPE}).encode("ascii"),
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+                "RqUID": str(uuid.uuid4()),
+                "Authorization": f"Basic {key}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30, context=_gigachat_ssl()) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        _gigachat_token["value"] = body["access_token"]
+        # expires_at приходит в миллисекундах.
+        _gigachat_token["expires_at"] = body.get("expires_at", 0) / 1000 or time.time() + 1800
+        return _gigachat_token["value"]
+
+
+def _gigachat_request(path: str, token: str, data: bytes, content_type: str,
+                      timeout: float = GIGACHAT_TIMEOUT) -> dict:
+    req = urllib.request.Request(
+        f"{GIGACHAT_BASE_URL}{path}",
+        data=data,
+        headers={
+            "Content-Type": content_type,
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout, context=_gigachat_ssl()) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _gigachat_upload(token: str, image_bytes: bytes) -> str:
+    """Загружает картинку в хранилище GigaChat (multipart) и возвращает её id."""
+    mime = _image_mime(image_bytes)
+    boundary = uuid.uuid4().hex
+    filename = "photo.jpg" if mime == "image/jpeg" else "photo.png"
+    data = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="purpose"\r\n\r\ngeneral\r\n'
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: {mime}\r\n\r\n"
+    ).encode("utf-8") + image_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    body = _gigachat_request("/files", token, data, f"multipart/form-data; boundary={boundary}")
+    return body["id"]
+
+
+def _gigachat_chat(prompt: str, max_tokens: int, image_bytes: bytes,
+                   api_key: Optional[str] = None) -> Optional[str]:
+    """Анализ фото через GigaChat: загрузка файла → chat/completions с attachments →
+    удаление файла. Возвращает текст или None; причину пишет в LAST_AI_CALL."""
+    key = api_key if api_key is not None else _gigachat_api_key()
+    if not key:
+        LAST_AI_CALL.update(provider=None, model=None, reason="no_key")
+        return None
+    started = time.monotonic()
+    token = file_id = None
+    try:
+        token = _gigachat_access_token(key)
+        file_id = _gigachat_upload(token, image_bytes)
+        payload = {
+            "model": GIGACHAT_MODEL,
+            "messages": [{"role": "user", "content": prompt, "attachments": [file_id]}],
+            "max_tokens": max_tokens,
+        }
+        body = _gigachat_request("/chat/completions", token,
+                                 json.dumps(payload).encode("utf-8"), "application/json")
+        elapsed = time.monotonic() - started
+        served_model = body.get("model") or GIGACHAT_MODEL
+        choices = body.get("choices") or []
+        text = ((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
+        if text:
+            LAST_AI_CALL.update(provider="gigachat", model=served_model,
+                                reason=f"ok {elapsed:.1f}s finish={choices[0].get('finish_reason')}")
+            print(f"[GIGACHAT] OK model={served_model} {elapsed:.1f}s ({len(text)} chars)")
+            return text
+        LAST_AI_CALL.update(provider=None, model=served_model,
+                            reason=f"gigachat: empty {elapsed:.1f}s body={repr(str(body)[:200])}")
+        print(f"[GIGACHAT] Пустой ответ (model={served_model}): {repr(str(body)[:200])}")
+        return None
+    except Exception as e:
+        elapsed = time.monotonic() - started
+        if getattr(e, "code", None) == 401:
+            # Токен мог протухнуть раньше срока — следующий вызов возьмёт новый.
+            _gigachat_token["value"] = None
+        reason = _describe_http_error(e, "gigachat", GIGACHAT_MODEL)
+        LAST_AI_CALL.update(provider=None, model=GIGACHAT_MODEL,
+                            reason=f"gigachat: {reason} after={elapsed:.1f}s")
+        print(f"[GIGACHAT] Ошибка ({reason}, {elapsed:.1f}s): {e}")
+        return None
+    finally:
+        if file_id:
+            try:
+                _gigachat_request(f"/files/{file_id}/delete", token, b"", "application/json", 30)
+            except Exception as e:
+                print(f"[GIGACHAT] Не удалось удалить файл {file_id}: {e}")
 
 
 def _openai_stream(provider: str, base_url: str, model: str, key: str, prompt: str,
@@ -506,8 +642,8 @@ def _google_generate(prompt: str, max_tokens: int, image_bytes: Optional[bytes] 
 def _generate_text(prompt: str, max_tokens: int = 8192, image_bytes: Optional[bytes] = None,
                    think_off: bool = False, rating_key: bool = False,
                    caller: Optional[str] = None) -> Optional[str]:
-    """Atria Dawn — первичный провайдер (только текст), затем NaraRouter,
-    Google — последний fallback.
+    """Atria Dawn — первичный провайдер для текста, GigaChat — для фото,
+    затем NaraRouter, Google — последний fallback.
 
     Каждый вызов пишет одну итоговую строку [AI-ROUTE] в лог: кто вызвал,
     какой провайдер/модель реально ответили и почему случился fallback."""
@@ -518,6 +654,12 @@ def _generate_text(prompt: str, max_tokens: int = 8192, image_bytes: Optional[by
             _log_ai_call(caller)
             return text
         print(f"[AI] Atria не ответила ({LAST_AI_CALL.get('reason')}) — пробую NaraRouter.")
+    if image_bytes and _gigachat_api_key():
+        text = _gigachat_chat(prompt, max_tokens, image_bytes)
+        if text:
+            _log_ai_call(caller)
+            return text
+        print(f"[AI] GigaChat не ответил ({LAST_AI_CALL.get('reason')}) — пробую NaraRouter.")
     text = _nara_chat(prompt, max_tokens, image_bytes,
                       api_key=_nara_api_key(ratings=rating_key))
     if text:
@@ -742,7 +884,7 @@ def analyze_food_photo(image_bytes: bytes, prompt: str) -> Optional[str]:
     чтобы вызывающий код мог показать кнопку повтора."""
     if not image_bytes:
         return None
-    if not _nara_api_key() and not _google_api_key():
+    if not _has_any_key(image=True):
         return None
     try:
         # think_off: на gemini-3.x мысли съедают лимит токенов и обрывают ответ.
@@ -755,10 +897,10 @@ def analyze_food_photo(image_bytes: bytes, prompt: str) -> Optional[str]:
 
 
 def analyze_body_photo(image_bytes: bytes, prompt: str, max_tokens: int = 2048) -> Optional[str]:
-    """Анализ фото телосложения (NaraRouter первично, Google fallback; Atria не видит фото)."""
+    """Анализ фото телосложения (GigaChat → NaraRouter → Google; Atria не видит фото)."""
     if not image_bytes:
         return None
-    if not _nara_api_key() and not _google_api_key():
+    if not _has_any_key(image=True):
         return None
     # think_off: иначе мысли съедают max_tokens и JSON обрывается на середине.
     return _generate_text(prompt, max_tokens, image_bytes=image_bytes, think_off=True)
