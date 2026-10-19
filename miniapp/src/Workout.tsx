@@ -371,9 +371,8 @@ export default function Workout() {
     hapticSelect()
     if (w.step === 5) set({ step: w.manual ? 4 : 3 })
     else if (w.step === 4) set({ step: 0, manual: '' })
-    else if (w.step > 1) set({ step: w.step - 1 })
+    else if (w.step > 0) set({ step: w.step - 1 })
     else if (data?.has_plan) setWiz(null)
-    else set({ step: 0 })
   }
 
   let backHandler: (() => void) | null = null
@@ -414,8 +413,10 @@ export default function Workout() {
         )}
 
         {w.step === 0 && (
-          <Empty icon="dumbbell" title="Плана тренировок пока нет"
-            text="Собери план с Check за три шага или вставь свой текстом."
+          <Empty icon="dumbbell" title={data.has_plan ? 'Новый план' : 'Плана тренировок пока нет'}
+            text={data.has_plan
+              ? 'Собери новый план с Check за три шага или вставь свой текстом. Текущий заменится после сохранения.'
+              : 'Собери план с Check за три шага или вставь свой текстом.'}
             action={
               <div className="btn-bar" style={{ width: '100%', maxWidth: 320 }}>
                 <button onClick={() => { hapticSelect(); set({ step: 1 }) }} className="btn btn-primary">
@@ -662,7 +663,7 @@ export default function Workout() {
               <span className="grow"><span className="cell-title" style={{ display: 'block' }}>Ревью месяца</span>
                 <span className="cell-sub" style={{ display: 'block' }}>Check предложит замены упражнений</span></span>
             </button>
-            <button className="cell" onClick={() => { hapticSelect(); setTools(null); setWiz({ ...NEW_WIZ, step: 1 }) }}>
+            <button className="cell" onClick={() => { hapticSelect(); setTools(null); setWiz({ ...NEW_WIZ }) }}>
               <span className="cell-icon is-metal"><Ico.refresh size={20} /></span>
               <span className="grow"><span className="cell-title" style={{ display: 'block' }}>Новый план</span>
                 <span className="cell-sub" style={{ display: 'block' }}>Собрать заново с Check или своим текстом</span></span>
