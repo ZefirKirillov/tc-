@@ -525,10 +525,73 @@ class TestWeightGoal(unittest.TestCase):
         ex = {"sets": 3, "reps": 10, "weight": 60}
         self.assertTrue(goal_met(ex, {"sets_done": 3, "reps_done": "10", "weight_done": None}))
 
-    def test_bodyweight_never_asks(self):
+    def test_bodyweight_goal_is_reps(self):
         from trackcheck.services.workout_service import goal_met
-        self.assertFalse(goal_met({"sets": 3, "reps": 10, "weight": None},
-                                  {"sets_done": 3, "reps_done": "12"}))
+        ex = {"sets": 3, "reps": 10, "weight": None}
+        self.assertTrue(goal_met(ex, {"sets_done": 3, "reps_done": "12"}))
+        self.assertTrue(goal_met(ex, {"sets_done": 3, "reps_done": "10,11,10"}))
+        self.assertFalse(goal_met(ex, {"sets_done": 3, "reps_done": "10,10,9"}))
+        self.assertFalse(goal_met(ex, {"sets_done": 2, "reps_done": "12"}))
+
+    def test_non_numeric_bodyweight_reps_never_ask(self):
+        from trackcheck.services.workout_service import goal_met, plan_raise_target
+        for reps in ("MAX", "40 мин", "до отказа"):
+            ex = {"exercise": "X", "sets": 1, "reps": reps, "weight": None}
+            self.assertFalse(goal_met(ex, {"sets_done": 1, "reps_done": "50"}))
+            self.assertIsNone(plan_raise_target(ex))
+
+    def test_per_set_weights_use_lightest_set(self):
+        from trackcheck.services.workout_service import goal_met
+        ex = {"sets": 3, "reps": 5, "weight": 90}
+        self.assertTrue(goal_met(ex, {"sets_done": 3, "reps_done": "5,5,5", "weight_done": "90/95/100"}))
+        self.assertFalse(goal_met(ex, {"sets_done": 3, "reps_done": "5,5,5", "weight_done": "80/90/100"}))
+
+    def test_shorthand_reps_per_set(self):
+        from trackcheck.services.workout_service import parse_set_shorthand
+        r = parse_set_shorthand("2 4 5", 60)
+        self.assertEqual((r["sets_done"], r["reps_done"], r["weight_done"]), (3, "2,4,5", 60))
+        self.assertEqual(parse_set_shorthand("10, 10, 8")["reps_done"], "10,10,8")
+
+    def test_shorthand_reps_with_weights(self):
+        from trackcheck.services.workout_service import parse_set_shorthand
+        r = parse_set_shorthand("3(80) 4(90) 5(100)", 60)
+        self.assertEqual((r["sets_done"], r["reps_done"], r["weight_done"]), (3, "3,4,5", "80/90/100"))
+        r = parse_set_shorthand("5 (82,5кг), 5(82.5)")
+        self.assertEqual((r["sets_done"], r["reps_done"], r["weight_done"]), (2, "5,5", 82.5))
+        self.assertEqual(parse_set_shorthand("5(100)")["sets_done"], 1)
+
+    def test_shorthand_leaves_the_rest_to_ai(self):
+        from trackcheck.services.workout_service import parse_set_shorthand
+        for raw in ("10", "3x10 60кг", "3(80) 4", "сделал всё", "2 4 5 не добил", "0 5"):
+            self.assertIsNone(parse_set_shorthand(raw), raw)
+
+    def test_format_per_set_weight(self):
+        from trackcheck.services.workout_service import format_weight
+        self.assertEqual(format_weight("80/90/100"), "80/90/100")
+        self.assertEqual(format_weight(62.50), "62.5")
+
+    def test_raise_target_weight_or_reps(self):
+        from trackcheck.services.workout_service import plan_raise_target
+        t = plan_raise_target({"exercise": "Жим", "sets": 3, "reps": 5, "weight": "90кг"})
+        self.assertEqual((t["field"], t["weight"]), ("weight", 90))
+        t = plan_raise_target({"exercise": "Подтягивания", "sets": 3, "reps": "8-10", "weight": None},
+                              {"sets_done": 3, "reps_done": "10"})
+        self.assertEqual((t["kind"], t["field"], t["reps"]), ("plan", "reps", "8-10"))
+
+    def test_raise_reps_all_occurrences_without_mutating(self):
+        from trackcheck.services.workout_service import raise_exercise_reps, shift_reps
+        self.assertEqual(shift_reps("8-10", 2), "10-12")
+        self.assertEqual(shift_reps("10,10,8", 1), "9")
+        plan = {"week_1": {"monday": [{"exercise": "Подтягивания", "reps": 10, "weight": None},
+                                      {"exercise": "Жим", "reps": 5, "weight": 90}]},
+                "week_2": {"friday": [{"exercise": "подтягивания", "reps": "8-10"}]}}
+        new = raise_exercise_reps(plan, "Подтягивания", 2)
+        self.assertEqual(new["week_1"]["monday"][0]["reps"], 12)
+        self.assertEqual(new["week_1"]["monday"][1]["reps"], 5)
+        self.assertEqual(new["week_2"]["friday"][0]["reps"], "10-12")
+        self.assertEqual(plan["week_1"]["monday"][0]["reps"], 10)
+        new = raise_exercise_reps(plan, "Жим", 2)
+        self.assertEqual(new["week_1"]["monday"][1]["reps"], 5)
 
     def test_raise_weight_all_occurrences_without_mutating(self):
         from trackcheck.services.workout_service import raise_exercise_weight

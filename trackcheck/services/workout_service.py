@@ -10,7 +10,7 @@ from trackcheck.database.repositories import (
     get_session_exercise_logs, get_ai_plan, update_plan_json,
     get_current_week_session_key, create_extra_session, add_workout, add_spark,
     update_streak, add_exercise_substitution, get_exercise_substitutions,
-    set_substitution_weight,
+    set_substitution_weight, set_substitution_reps,
 )
 from trackcheck.utils.dates import user_today_str
 
@@ -100,30 +100,79 @@ def _numbers(value) -> list:
 
 
 
+def _reps_base(reps):
+    """Повторения, которые можно поднимать: «10», «8-10», а «10,10,8» — по худшему
+    подходу. «MAX», «40 мин», «до отказа» — None."""
+    text = str(reps if reps is not None else "").strip()
+    if re.fullmatch(r"\d+(?:\s*[-–]\s*\d+)?", text):
+        return re.sub(r"\s*[-–]\s*", "-", text)
+    if re.fullmatch(r"\d+(?:\s*[,;\s]\s*\d+)+", text):
+        return str(min(int(n) for n in re.findall(r"\d+", text)))
+    return None
+
+
+
+def shift_reps(reps, increment: int):
+    """«10» +2 → «12», «8-10» +2 → «10-12»."""
+    base = _reps_base(reps)
+    if base is None:
+        return None
+    return "-".join(str(int(n) + increment) for n in base.split("-"))
+
+
+
+def parse_set_shorthand(raw: str, planned_weight=None):
+    """Короткая запись подходов без ИИ:
+    «2 4 5» — три подхода по 2, 4 и 5 повторений (вес — плановый);
+    «3(80) 4(90)» — 3 повторения с 80 кг, затем 4 с 90 кг.
+    Всё остальное — None, разбирает ИИ."""
+    text = (raw or "").strip()
+    weighted = re.findall(r"(\d+)\s*\(\s*(\d+(?:[.,]\d+)?)\s*(?:кг|kg)?\s*\)", text, re.I)
+    if weighted and re.fullmatch(
+            r"(?:\d+\s*\(\s*\d+(?:[.,]\d+)?\s*(?:кг|kg)?\s*\)[\s,;]*)+", text, re.I):
+        reps = [int(r) for r, _ in weighted]
+        weights = [float(w.replace(",", ".")) for _, w in weighted]
+        weight = weights[0] if len(set(weights)) == 1 else "/".join(f"{w:g}" for w in weights)
+    elif re.fullmatch(r"\d+(?:[\s,;]+\d+)+", text):
+        reps = [int(n) for n in re.findall(r"\d+", text)]
+        weight = planned_weight
+    else:
+        return None
+    if len(reps) > 30 or not all(0 < r <= 1000 for r in reps):
+        return None
+    return {"sets_done": len(reps), "reps_done": ",".join(map(str, reps)),
+            "weight_done": weight, "completed": True, "note": None}
+
+
+
 def goal_met(target: dict, result: dict) -> bool:
-    """Выполнена ли весовая цель: подходы, повторения и вес не ниже плана.
+    """Выполнена ли цель: подходы и повторения не ниже плана, вес — тоже.
     Повторения цели «8-10» считаются по верхней границе, а факт «10,10,8» —
-    по худшему подходу. Без веса в цели — False (нечего поднимать)."""
-    if not target.get("weight") or not result or result.get("completed") is False:
+    по худшему подходу; вес по подходам «80/90/100» — по самому лёгкому.
+    Без веса в цели — только подходы и повторения (их и поднимем)."""
+    if not result or result.get("completed") is False:
         return False
-    t_sets, t_reps, t_weight = (_numbers(target.get("sets")), _numbers(target.get("reps")),
-                                _numbers(target.get("weight")))
+    t_weight = _numbers(target.get("weight"))
+    t_sets = _numbers(target.get("sets"))
+    # Без веса поднимаем повторения — «40 мин» или «MAX» сравнивать нечего
+    t_reps = _numbers(target.get("reps")) if t_weight else _numbers(_reps_base(target.get("reps")))
     d_sets, d_reps = _numbers(result.get("sets_done")), _numbers(result.get("reps_done"))
+    if not (t_sets and t_reps and d_sets and d_reps):
+        return False
+    if d_sets[0] < t_sets[0] or min(d_reps) < max(t_reps):
+        return False
+    if not t_weight:
+        return True
     # Вес не указан в ответе — значит работал с плановым
     d_weight = _numbers(result.get("weight_done")) or t_weight
-    if not (t_sets and t_reps and t_weight and d_sets and d_reps and d_weight):
-        return False
-    if len(d_reps) > 1:
-        d_reps_val = min(d_reps)
-    else:
-        d_reps_val = d_reps[0]
-    return (d_sets[0] >= t_sets[0] and d_reps_val >= max(t_reps)
-            and d_weight[0] >= t_weight[0])
+    return min(d_weight) >= t_weight[0]
 
 
 
 def format_weight(w) -> str:
-    return f"{float(w):g}"
+    """60 → «60», «80/90/100» (вес по подходам) — как есть, без лишних нулей."""
+    nums = _numbers(w)
+    return "/".join(f"{n:g}" for n in nums) if nums else str(w)
 
 
 
@@ -142,6 +191,25 @@ def raise_exercise_weight(plan: dict, exercise_name: str, increment: float) -> d
                 w = _numbers(ex.get("weight"))
                 if name == target and w:
                     ex["weight"] = round(w[0] + increment, 2)
+    return plan
+
+
+
+def raise_exercise_reps(plan: dict, exercise_name: str, increment: int) -> dict:
+    """Поднимает повторения упражнения без веса во всех неделях/днях плана."""
+    plan = copy.deepcopy(plan)
+    target = exercise_name.strip().lower()
+    for week_key, week in plan.items():
+        if not week_key.startswith("week_") or not isinstance(week, dict):
+            continue
+        for day in week.values():
+            if not isinstance(day, list):
+                continue
+            for ex in day:
+                name = str(ex.get("exercise", ex.get("name", ""))).strip().lower()
+                new = shift_reps(ex.get("reps"), increment)
+                if name == target and new and not _numbers(ex.get("weight")):
+                    ex["reps"] = int(new) if isinstance(ex.get("reps"), int) and new.isdigit() else new
     return plan
 
 
@@ -266,18 +334,42 @@ def count_workout(user_id: int):
 
 
 
-def plan_raise_target(ex: dict, result: dict = None):
-    """Цель с весом выполнена — предложим поднять вес в плане.
-    Без result — нажата «Цель выполнена», проверять нечего."""
-    if ex.get("weight") and (result is None or goal_met(ex, result)):
-        return {"kind": "plan", "name": exercise_name(ex), "weight": ex.get("weight")}
+def raise_target_for(name: str, weight, reps, **where):
+    """Что предложить поднять: вес, а если его нет — повторения.
+    where — {"kind": "plan"} или {"kind": "sub", "sub_id": ...}."""
+    w = _numbers(weight)
+    if w:
+        return {**where, "field": "weight", "name": name, "weight": min(w)}
+    base = _reps_base(reps)
+    if base:
+        return {**where, "field": "reps", "name": name, "reps": base}
     return None
 
 
 
-def apply_weight_raise(user_id: int, target: dict, increment: float) -> float:
-    """Поднимает вес: в плане (все вхождения упражнения) или в последней
-    замене — тогда новый вес подскажется в следующий раз."""
+def plan_raise_target(ex: dict, result: dict = None):
+    """Цель выполнена — предложим поднять вес (или повторения, если веса нет).
+    Без result — нажата «Цель выполнена», проверять нечего."""
+    if result is not None and not goal_met(ex, result):
+        return None
+    return raise_target_for(exercise_name(ex), ex.get("weight"), ex.get("reps"), kind="plan")
+
+
+
+def apply_raise(user_id: int, target: dict, increment: float):
+    """Поднимает вес или повторения: в плане (все вхождения упражнения) или в
+    последней замене — тогда новые цифры подскажутся в следующий раз.
+    Возвращает новый вес (число) или новые повторения (строка)."""
+    if target.get("field") == "reps":
+        step = int(increment)
+        new_reps = shift_reps(target["reps"], step)
+        if target["kind"] == "plan":
+            plan_data = get_ai_plan(user_id)
+            if plan_data:
+                update_plan_json(user_id, raise_exercise_reps(plan_data["plan"], target["name"], step))
+        else:
+            set_substitution_reps(user_id, int(target["sub_id"]), new_reps)
+        return new_reps
     new_weight = round(float(target["weight"]) + increment, 2)
     if target["kind"] == "plan":
         plan_data = get_ai_plan(user_id)
@@ -307,16 +399,14 @@ def log_substitution_repeat(user_id: int, session_id: int, ex: dict, sub: dict):
     log_exercise(session_id, user_id, sub["substitute_name"], ex, result)
     new_id = add_exercise_substitution(user_id, original, sub["substitute_name"],
                                        sub.get("sets"), sub.get("reps"), sub.get("weight"))
-    raise_target = None
-    if sub.get("weight"):
-        raise_target = {"kind": "sub", "sub_id": new_id, "name": sub["substitute_name"],
-                        "weight": sub["weight"]}
+    raise_target = raise_target_for(sub["substitute_name"], sub.get("weight"), sub.get("reps"),
+                                    kind="sub", sub_id=new_id)
     return result, raise_target
 
 
 
 def log_substitution_items(user_id: int, session_id: int, ex: dict, items: list, raw: str):
-    """Замена, описанная текстом (уже разобранная ИИ). Цель для вопроса про вес —
+    """Замена, описанная текстом (уже разобранная ИИ). Цель для вопроса про вес/повторения —
     прошлые цифры этой же замены. Возвращает (results, raise_target)."""
     original = exercise_name(ex)
     previous = {s["substitute_name"].strip().lower(): s
@@ -333,8 +423,9 @@ def log_substitution_items(user_id: int, session_id: int, ex: dict, items: list,
         if raise_target is None and prev and goal_met(
                 {"sets": prev.get("sets"), "reps": prev.get("reps"), "weight": prev.get("weight")},
                 result):
-            raise_target = {"kind": "sub", "sub_id": new_id, "name": it["exercise"],
-                            "weight": it.get("weight_done") or prev.get("weight")}
+            raise_target = raise_target_for(
+                it["exercise"], it.get("weight_done") or prev.get("weight"), prev.get("reps"),
+                kind="sub", sub_id=new_id)
         results.append({"exercise_name": it["exercise"], "result": result})
     return results, raise_target
 

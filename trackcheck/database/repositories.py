@@ -1064,6 +1064,13 @@ def set_substitution_weight(user_id: int, sub_id: int, weight: float):
 
 
 
+def set_substitution_reps(user_id: int, sub_id: int, reps: str):
+    db.execute("UPDATE exercise_substitutions SET reps = ? WHERE id = ? AND user_id = ?",
+               (reps, sub_id, user_id))
+    db.commit()
+
+
+
 def get_next_training_day(plan_data: dict, user_id: Optional[int] = None) -> Optional[str]:
     """Возвращает дату и название следующей тренировки."""
     plan = plan_data["plan"]

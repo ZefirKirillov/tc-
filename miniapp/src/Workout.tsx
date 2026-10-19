@@ -28,6 +28,7 @@ function logKey(l: any) {
 }
 
 const RAISE_STEPS = [1.25, 2.5, 5]
+const RAISE_REPS_STEPS = [1, 2, 3]
 
 const DAYS: Array<[string, string]> = [
   ['monday', 'Понедельник'], ['tuesday', 'Вторник'], ['wednesday', 'Среда'], ['thursday', 'Четверг'],
@@ -230,11 +231,15 @@ export default function Workout() {
 
   async function raise(increment: number) {
     if (!raiseT) return
+    const reps = raiseT.field === 'reps'
+    if (reps && !(Number.isInteger(increment) && increment > 0 && increment <= 100)) {
+      b.setErr('Прибавка — целое число повторений от 1 до 100.'); return
+    }
     if (!(increment > 0 && increment <= 100)) { b.setErr('Прибавка — число от 0 до 100 кг.'); return }
     setBusy(true)
     try {
       const r = await api.workoutRaise(raiseT, increment)
-      b.setOk(`${raiseT.name}: в следующий раз ${fmtWeight(r.weight)}`)
+      b.setOk(`${raiseT.name}: в следующий раз ${reps ? `${r.reps} повт.` : fmtWeight(r.weight)}`)
       haptic()
       setRaiseT(null)
     } catch (e) { b.setErr(e) } finally { setBusy(false) }
@@ -819,10 +824,14 @@ export default function Workout() {
       {raiseT && (
         <Sheet title="Цель выполнена" onClose={() => setRaiseT(null)}>
           <p style={{ margin: '0 0 12px' }}>
-            {raiseT.name} — <span className="num">{fmtWeight(raiseT.weight)}</span>. Поднять вес в следующий раз?
+            {raiseT.field === 'reps' ? (
+              <>{raiseT.name} — <span className="num">{raiseT.reps} повт.</span> Поднять повторения в следующий раз?</>
+            ) : (
+              <>{raiseT.name} — <span className="num">{fmtWeight(raiseT.weight)}</span>. Поднять вес в следующий раз?</>
+            )}
           </p>
           <div className="chips" style={{ flexWrap: 'nowrap' }}>
-            {RAISE_STEPS.map((v) => (
+            {(raiseT.field === 'reps' ? RAISE_REPS_STEPS : RAISE_STEPS).map((v) => (
               <button key={v} onClick={() => raise(v)} disabled={busy} className="chip num grow" style={{ minHeight: 40 }}>
                 +{String(v).replace('.', ',')}
               </button>
@@ -830,7 +839,8 @@ export default function Workout() {
           </div>
           <div className="hstack mt" style={{ gap: 8 }}>
             <input value={raiseCustom} onChange={(e) => setRaiseCustom(e.target.value)} className="field grow"
-              inputMode="decimal" placeholder="Своё, кг" maxLength={6} disabled={busy} />
+              inputMode={raiseT.field === 'reps' ? 'numeric' : 'decimal'}
+              placeholder={raiseT.field === 'reps' ? 'Своё, повт.' : 'Своё, кг'} maxLength={6} disabled={busy} />
             <button onClick={() => raise(Number(raiseCustom.replace(',', '.')))} disabled={busy || !raiseCustom.trim()}
               className="btn btn-ghost">Поднять</button>
           </div>

@@ -20,9 +20,12 @@ export function fmt(n: unknown, fallback = '—'): string {
   return nf.format(v).replace(/\s/g, '\u2009')
 }
 
-/** Plan weights arrive as numbers or strings like "80кг" / "собств. вес". */
+/** Plan weights arrive as numbers or strings like "80кг" / "собств. вес";
+ *  per-set weights of a logged result as "80/90/100". */
 export function fmtWeight(w: unknown): string {
   if (w == null || w === '' || w === 0) return ''
+  const parts = String(w).split('/').map((p) => Number(p.trim().replace(',', '.')))
+  if (parts.length > 1 && parts.every(Number.isFinite)) return `${parts.map((p) => fmt(p)).join('/')} кг`
   const n = typeof w === 'number' ? w : Number(String(w).replace(',', '.'))
   return Number.isFinite(n) ? `${fmt(n)} кг` : String(w)
 }

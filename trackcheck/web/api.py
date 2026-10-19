@@ -49,6 +49,7 @@ RU_ERRORS = {
     "bad_day": "Этого дня нет в плане.",
     "session_exists": "На сегодня тренировка уже есть.",
     "bad_increment": "Прибавка — число от 0 до 100 кг.",
+    "bad_increment_reps": "Прибавка — целое число повторений от 1 до 100.",
     "no_body": "На фото не видно тела. Пришли фото в полный рост или по пояс.",
 }
 
@@ -1026,7 +1027,9 @@ async def api_workout_log_text(request: web.Request):
 
     if not await run_db(_check):
         return _err("bad_session", 404)
-    result = await run_in_thread(gemini_parse_exercise_result, ex, raw_text)
+    from trackcheck.services.workout_service import parse_set_shorthand
+    result = (parse_set_shorthand(raw_text, ex.get("weight"))
+              or await run_in_thread(gemini_parse_exercise_result, ex, raw_text))
 
     def _log():
         db.execute(
@@ -1206,24 +1209,31 @@ async def api_workout_replace(request: web.Request):
 
 @require_user
 async def api_workout_raise(request: web.Request):
-    """Goal hit → raise the weight next time: {target (from a log response), increment}."""
-    from trackcheck.services.workout_service import apply_weight_raise
+    """Goal hit → raise the weight (or reps, for exercises without weight) next time:
+    {target (from a log response), increment}."""
+    from trackcheck.services.workout_service import apply_raise, shift_reps
     user_id = request["tg_user"]["id"]
     body = await _json_body(request)
     if body is None:
         return _err("bad_json")
     target = body.get("target") or {}
+    reps = target.get("field") == "reps"
     try:
         increment = float(str(body.get("increment")).replace(",", "."))
-        float(target["weight"])
-        valid = (0 < increment <= 100 and target.get("kind") in ("plan", "sub")
+        if reps:
+            valid = increment.is_integer() and shift_reps(target.get("reps"), 1) is not None
+        else:
+            float(target["weight"])
+            valid = True
+        valid = (valid and 0 < increment <= 100 and target.get("kind") in ("plan", "sub")
                  and (target["kind"] == "plan" or int(target.get("sub_id")) > 0))
     except (TypeError, ValueError, KeyError):
         valid = False
     if not valid:
-        return _err("bad_increment")
-    new_weight = await run_db(apply_weight_raise, user_id, target, increment)
-    return web.json_response({"ok": True, "data": {"weight": new_weight}})
+        return _err("bad_increment_reps" if reps else "bad_increment")
+    new_value = await run_db(apply_raise, user_id, target, increment)
+    data = {"reps": new_value} if reps else {"weight": new_value}
+    return web.json_response({"ok": True, "data": data})
 
 
 @require_user

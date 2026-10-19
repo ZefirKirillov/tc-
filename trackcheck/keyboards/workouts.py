@@ -252,6 +252,17 @@ def ws_raise_weight_keyboard():
 
 
 
+def ws_raise_reps_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=with_back_kb([
+        [InlineKeyboardButton(text="+1", callback_data="ws_raise_1"),
+         InlineKeyboardButton(text="+2", callback_data="ws_raise_2"),
+         InlineKeyboardButton(text="+3", callback_data="ws_raise_3")],
+        [InlineKeyboardButton(text="Своё значение", callback_data="ws_raise_custom"),
+         InlineKeyboardButton(text="Оставить", callback_data="ws_raise_keep")],
+    ]))
+
+
+
 def wp_settings_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=with_back_kb([
         [InlineKeyboardButton(text="🔄 Обновить план", callback_data="wp_reset")],

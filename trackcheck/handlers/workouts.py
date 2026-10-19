@@ -34,7 +34,7 @@ from trackcheck.services.tracker_service import sync_activity_rating_for_today
 from trackcheck.services.workout_service import (
     _format_full_plan, _format_session_detail, apply_monthly_changes,
     format_weight, exercise_name, log_exercise, count_workout,
-    plan_raise_target, apply_weight_raise, substitution_suggestions,
+    plan_raise_target, apply_raise, parse_set_shorthand, substitution_suggestions,
     log_substitution_repeat, log_substitution_items, plan_day_options,
     start_plan_day, save_free_workout,
 )
@@ -63,7 +63,7 @@ from trackcheck.keyboards.workouts import (
     ws_today_keyboard, ws_exercise_keyboard, ws_skip_day_keyboard,
     ws_rest_day_keyboard, wp_settings_keyboard, ws_rest_day_actions_keyboard,
     ws_pick_day_keyboard, ws_free_log_keyboard, ws_replace_keyboard,
-    ws_raise_weight_keyboard,
+    ws_raise_weight_keyboard, ws_raise_reps_keyboard,
 )
 from trackcheck.runtime import (user_temp_messages, user_last_menu,
                                 user_history_page, user_nav, nav_push)
@@ -1620,7 +1620,8 @@ async def ws_exercise_text_input(message: Message, bot: Bot, state: FSMContext):
     session_id = data.get("session_id")
     ex = exercises[index]
     await _edit_workout_menu(message, bot, user_id, "Записываю...", None)
-    result = await run_in_thread(gemini_parse_exercise_result, ex, raw)
+    result = (parse_set_shorthand(raw, ex.get("weight"))
+              or await run_in_thread(gemini_parse_exercise_result, ex, raw))
     log_exercise(session_id, user_id, exercise_name(ex), ex, result, raw_input=raw)
     await state.update_data(exercise_index=index + 1)
     await _advance(message, bot, state, user_id, plan_raise_target(ex, result))
@@ -1706,19 +1707,30 @@ async def ws_replace_text_input(message: Message, bot: Bot, state: FSMContext):
 
 
 
-# ── Цель выполнена → поднять вес? ────────────────────────────────────────────
+# ── Цель выполнена → поднять вес / повторения? ──────────────────────────────
+
+def _is_reps_raise(target: dict) -> bool:
+    return target.get("field") == "reps"
+
+
 
 async def _advance(message, bot: Bot, state: FSMContext, user_id: int, raise_target=None):
-    """После записи упражнения: если цель с весом выполнена — сначала спросить
-    про вес, иначе сразу следующее упражнение / конец тренировки."""
+    """После записи упражнения: если цель выполнена — сначала спросить про вес
+    (или повторения, если упражнение без веса), иначе сразу дальше."""
     if not raise_target:
         await _next_exercise_or_finish(message, bot, state, user_id)
         return
     await state.update_data(pending_raise=raise_target, raise_custom=False)
     await state.set_state(WorkoutSessionState.raising_weight)
-    text = (f"Цель выполнена 💪\n{raise_target['name']} — {format_weight(raise_target['weight'])} кг\n\n"
-            "Поднять вес в следующий раз?")
-    await _edit_workout_menu(message, bot, user_id, text, ws_raise_weight_keyboard())
+    if _is_reps_raise(raise_target):
+        text = (f"Цель выполнена 💪\n{raise_target['name']} — {raise_target['reps']} повт.\n\n"
+                "Поднять повторения в следующий раз?")
+        keyboard = ws_raise_reps_keyboard()
+    else:
+        text = (f"Цель выполнена 💪\n{raise_target['name']} — {format_weight(raise_target['weight'])} кг\n\n"
+                "Поднять вес в следующий раз?")
+        keyboard = ws_raise_weight_keyboard()
+    await _edit_workout_menu(message, bot, user_id, text, keyboard)
 
 
 
@@ -1730,12 +1742,16 @@ async def ws_raise_weight(callback: CallbackQuery, bot: Bot, state: FSMContext):
     target = data.get("pending_raise")
     if choice == "custom":
         await state.update_data(raise_custom=True)
-        await callback.message.edit_text("На сколько кг поднять? Напиши число, например 3.75:")
+        await callback.message.edit_text(
+            "На сколько повторений поднять? Напиши целое число, например 4:"
+            if target and _is_reps_raise(target) else
+            "На сколько кг поднять? Напиши число, например 3.75:")
         await callback.answer()
         return
     if target and choice != "keep":
-        new_weight = apply_weight_raise(user_id, target, float(choice))
-        await callback.answer(f"В следующий раз: {format_weight(new_weight)} кг")
+        new_value = apply_raise(user_id, target, float(choice))
+        await callback.answer(f"В следующий раз: {new_value} повт." if _is_reps_raise(target)
+                              else f"В следующий раз: {format_weight(new_value)} кг")
     else:
         await callback.answer()
     await state.update_data(pending_raise=None)
@@ -1755,15 +1771,17 @@ async def ws_raise_weight_custom(message: Message, bot: Bot, state: FSMContext):
     target = data.get("pending_raise")
     if not data.get("raise_custom") or not target:
         return
+    reps = _is_reps_raise(target)
     try:
         increment = float(raw)
-        if not 0 < increment <= 100:
+        if not 0 < increment <= 100 or (reps and not increment.is_integer()):
             raise ValueError
     except ValueError:
         await _edit_workout_menu(message, bot, user_id,
+                                 "Нужно целое число больше нуля, например 4:" if reps else
                                  "Нужно число больше нуля, например 3.75:", None)
         return
-    apply_weight_raise(user_id, target, increment)
+    apply_raise(user_id, target, increment)
     await state.update_data(pending_raise=None, raise_custom=False)
     await _next_exercise_or_finish(message, bot, state, user_id)
 
