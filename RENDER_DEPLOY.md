@@ -65,3 +65,10 @@ every 5 minutes" part matters.
   Turso, or the database, so it keeps returning 200 even if one of those
   backends is temporarily unavailable. Check BotFather/Telegram and the bot
   logs if the bot itself stops responding while `/healthz` is green.
+
+## 7. Backup monitor (GitHub Actions)
+
+`.github/workflows/keepalive.yml` also pings `/healthz` every 5 minutes from
+GitHub's runners. GitHub's cron can lag by several minutes and is disabled
+after 60 days without repo activity, so keep UptimeRobot as the primary
+monitor; the workflow only covers gaps.
