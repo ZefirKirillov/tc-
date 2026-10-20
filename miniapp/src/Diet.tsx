@@ -24,6 +24,16 @@ function macroLine(m: Macros): string {
   return `Б ${fmt(Math.round(m.protein))} · Ж ${fmt(Math.round(m.fat))} · У ${fmt(Math.round(m.carbs))} г`
 }
 
+/** US Navy body-fat %, all lengths in cm; hip is used for women only. Null if the tape numbers can't be right. */
+function navyBodyFat(female: boolean, height: number, neck: number, waist: number, hip: number): number | null {
+  const d = female ? waist + hip - neck : waist - neck
+  if (!(height > 0) || !(d > 0)) return null
+  const bf = female
+    ? 495 / (1.29579 - 0.35004 * Math.log10(d) + 0.221 * Math.log10(height)) - 450
+    : 495 / (1.0324 - 0.19077 * Math.log10(d) + 0.15456 * Math.log10(height)) - 450
+  return bf >= 1 && bf <= 70 ? Math.round(bf * 10) / 10 : null
+}
+
 export default function Diet() {
   const b = useBanner()
   const [data, setData] = useState<any>(() => peek('diet') ?? null)
@@ -42,6 +52,11 @@ export default function Diet() {
   const [weight, setWeight] = useState('')
   const [fat, setFat] = useState('')
   const [bodyBusy, setBodyBusy] = useState(false)
+  // Tape measurements for the body-fat calculator inside the «Замер тела» sheet.
+  const [calcOpen, setCalcOpen] = useState(false)
+  const [neck, setNeck] = useState('')
+  const [waist, setWaist] = useState('')
+  const [hip, setHip] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   // Entry forms live in sheets — the screen itself only shows the day.
   const [adding, setAdding] = useState(false)
@@ -141,7 +156,7 @@ export default function Diet() {
     setBodyBusy(true)
     try {
       await api.saveBody(w, f)
-      setWeight(''); setFat('')
+      setWeight(''); setFat(''); setNeck(''); setWaist(''); setHip(''); setCalcOpen(false)
       setBodyOpen(false)
       b.setOk('Замер сохранён.')
       await load()
@@ -173,6 +188,8 @@ export default function Diet() {
   if (!data.profile) return <DietSetup onDone={load} />
 
   const goal = data.profile.daily_calories ?? 0
+  const female = data.profile.gender === 'женский'
+  const calcFat = navyBodyFat(female, num(String(data.profile.height ?? '')), num(neck), num(waist), num(hip))
   const eaten = Math.round(data.today_calories ?? 0)
   const left = Math.round(goal - eaten)
   const entries: any[] = data.today_log ?? []
@@ -327,7 +344,28 @@ export default function Diet() {
             <input value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="Вес, кг" inputMode="decimal" className="field field-num" maxLength={6} />
             <input value={fat} onChange={(e) => setFat(e.target.value)} placeholder="% жира" inputMode="decimal" className="field field-num" maxLength={5} />
           </div>
-          <div className="row-meta" style={{ marginTop: 6 }}>Можно указать только одно из двух.</div>
+          <div className="row-meta" style={{ marginTop: 6 }}>Заполни оба поля или одно — что знаешь.</div>
+          {!calcOpen ? (
+            <button onClick={() => setCalcOpen(true)} className="btn btn-quiet mt">Рассчитать % жира по обхватам</button>
+          ) : (
+            <div className="mt">
+              <div className="field-row">
+                <input value={neck} onChange={(e) => setNeck(e.target.value)} placeholder="Шея, см" inputMode="decimal" className="field field-num" maxLength={5} />
+                <input value={waist} onChange={(e) => setWaist(e.target.value)} placeholder="Талия, см" inputMode="decimal" className="field field-num" maxLength={5} />
+                {female && <input value={hip} onChange={(e) => setHip(e.target.value)} placeholder="Бёдра, см" inputMode="decimal" className="field field-num" maxLength={5} />}
+              </div>
+              <div className="row-meta" style={{ marginTop: 6 }}>
+                Формула ВМС США, рост {fmt(data.profile.height)} см из профиля. Шея — под кадыком, талия — {female ? 'в самом узком месте, бёдра — в самом широком' : 'на уровне пупка'}.
+              </div>
+              {calcFat != null ? (
+                <button onClick={() => { setFat(String(calcFat)); hapticSelect() }} className="btn btn-quiet mt">
+                  ≈ <span className="num">{fmt(calcFat)}</span> % — подставить
+                </button>
+              ) : (neck.trim() && waist.trim() && (!female || hip.trim())) && (
+                <div className="row-meta" style={{ marginTop: 6 }}>Проверь обхваты — так не получается посчитать.</div>
+              )}
+            </div>
+          )}
           <MainAction cfg={main} />
         </Sheet>
       )}
