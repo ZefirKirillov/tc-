@@ -29,8 +29,14 @@ from trackcheck.database.repositories import (
 from trackcheck.utils.formatting import format_macros, strip_markdown, workouts_progress
 
 
-# Atria Dawn (Shanghai AI Lab) — первичный провайдер для текста.
-# Модель текстовая: запросы с картинками идут сразу в Nara/Google.
+# Vyce AI (OpenAI-совместимый прокси) — первичный провайдер для текста.
+# DeepSeek Flash текстовый и быстрый: запросы с картинками сюда не идут.
+VYCE_BASE_URL = os.environ.get("VYCE_BASE_URL", "https://vyceai.com/v1").rstrip("/")
+VYCE_MODEL = os.environ.get("VYCE_MODEL", "deepseek-v4-flash")
+VYCE_TIMEOUT = float(os.environ.get("VYCE_TIMEOUT", "60"))
+
+# Atria Dawn (Shanghai AI Lab) — текстовый fallback после Vyce.
+# Модель текстовая: запросы с картинками идут сразу в GigaChat/Google.
 ATRIA_BASE_URL = os.environ.get("ATRIA_BASE_URL", "https://api.atria-asi.ai/v1").rstrip("/")
 ATRIA_MODEL = os.environ.get("ATRIA_MODEL", "Atria-Dawn-Preview")
 # low — быстрее ответ; medium/high — дольше думает. Пусто — не передавать параметр.
@@ -40,8 +46,6 @@ ATRIA_REASONING_EFFORT = os.environ.get("ATRIA_REASONING_EFFORT", "low").strip()
 ATRIA_MIN_TOKENS = int(os.environ.get("ATRIA_MIN_TOKENS", "2048"))
 ATRIA_TIMEOUT = float(os.environ.get("ATRIA_TIMEOUT", "180"))
 
-NARA_BASE_URL = os.environ.get("NARA_BASE_URL", "https://router.bynara.id/v1").rstrip("/")
-NARA_MODEL = os.environ.get("NARA_MODEL", "ling-3.0-flash-vl-free")
 # GigaChat (Сбер) — первичный провайдер только для фото (бесплатный Freemium).
 # Текстовые запросы сюда не идут. Ключ авторизации — GIGACHAT_AUTH_KEY
 # (Basic-ключ из личного кабинета developers.sber.ru).
@@ -64,14 +68,10 @@ GOOGLE_FALLBACK_MODELS = [
 ]
 
 
-def _nara_api_key(ratings: bool = False) -> Optional[str]:
+def _vyce_api_key(ratings: bool = False) -> Optional[str]:
     if ratings:
-        return (
-            os.environ.get("NARA_API_KEY_RATINGS")
-            or os.environ.get("NARA_API_RATINGS")
-            or os.environ.get("NARA_API")
-        )
-    return os.environ.get("NARA_API") or os.environ.get("NARA_API_KEY")
+        return os.environ.get("VYCE_API_KEY_RATINGS") or os.environ.get("VYCE_API_KEY")
+    return os.environ.get("VYCE_API_KEY")
 
 
 def _google_api_key(ratings: bool = False) -> Optional[str]:
@@ -91,16 +91,16 @@ def _gigachat_api_key() -> Optional[str]:
 
 
 def _has_any_key(ratings: bool = False, image: bool = False) -> bool:
-    """Есть ли хоть один провайдер для запроса. Atria не принимает картинки,
-    GigaChat используется только для картинок."""
-    return bool((not image and _atria_api_key(ratings))
+    """Есть ли хоть один провайдер для запроса. Vyce и Atria не принимают
+    картинки, GigaChat используется только для картинок."""
+    return bool((not image and (_vyce_api_key(ratings) or _atria_api_key(ratings)))
                 or (image and _gigachat_api_key())
-                or _nara_api_key(ratings) or _google_api_key(ratings))
+                or _google_api_key(ratings))
 
 
 # Имя последнего сработавшего провайдера/модели — для логов и отладки.
-# Обновляется каждым вызовом _generate_text: {'provider': 'atria'|'nara'|'google'|None,
-# 'model': ..., 'reason': ...}. reason объясняет, почему Atria/Nara не сработала
+# Обновляется каждым вызовом _generate_text: {'provider': 'vyce'|'atria'|'gigachat'|'google'|None,
+# 'model': ..., 'reason': ...}. reason объясняет, почему Vyce/Atria не сработала
 # и произошёл fallback (или почему не сработал никто).
 LAST_AI_CALL: dict = {"provider": None, "model": None, "reason": None}
 
@@ -144,7 +144,7 @@ def _image_mime(image_bytes: bytes) -> str:
 def _openai_chat(provider: str, base_url: str, model: str, key: Optional[str],
                  prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None,
                  extra: Optional[dict] = None, timeout: float = 120) -> Optional[str]:
-    """Вызов OpenAI-совместимого /chat/completions (Atria, NaraRouter).
+    """Вызов OpenAI-совместимого /chat/completions (Vyce, Atria).
 
     Возвращает текст ответа или None. Причину неудачи пишет в
     LAST_AI_CALL['reason']: 'no_key' | 'empty' | 'http_<code>: <body>' |
@@ -209,7 +209,7 @@ def _openai_chat(provider: str, base_url: str, model: str, key: Optional[str],
                 raise
         elapsed = time.monotonic() - started
         # Какая модель реально ответила: доверяем полю "model" из ответа
-        # роутера (может отличаться от запрошенной при remap на стороне Nara).
+        # роутера (может отличаться от запрошенной при remap на стороне прокси).
         served_model = body.get("model") or model
         choices = body.get("choices") or []
         if choices:
@@ -241,11 +241,11 @@ def _openai_chat(provider: str, base_url: str, model: str, key: Optional[str],
         return None
 
 
-def _nara_chat(prompt: str, max_tokens: int, image_bytes: Optional[bytes] = None,
+def _vyce_chat(prompt: str, max_tokens: int,
                api_key: Optional[str] = None) -> Optional[str]:
-    key = api_key if api_key is not None else _nara_api_key()
-    return _openai_chat("nara", NARA_BASE_URL, NARA_MODEL, key,
-                        prompt, max_tokens, image_bytes)
+    key = api_key if api_key is not None else _vyce_api_key()
+    return _openai_chat("vyce", VYCE_BASE_URL, VYCE_MODEL, key,
+                        prompt, max_tokens, timeout=VYCE_TIMEOUT)
 
 
 def _atria_chat(prompt: str, max_tokens: int,
@@ -449,18 +449,18 @@ def gemini_generate_stream(prompt: str, max_tokens: int = 8192,
                            caller: str = "gemini_generate_stream"):
     """Потоковая версия gemini_generate: генератор кусков сырого текста.
 
-    Цепочка та же: Atria → NaraRouter (стримингом) → Google (целиком, одним куском).
+    Цепочка та же: Vyce → Atria (стримингом) → Google (целиком, одним куском).
     Если провайдер упал до первого куска — пробуем следующий; если посреди
     ответа — останавливаемся на том, что успели получить. Ничего не выдал —
     ответа нет, причина в LAST_AI_CALL (см. _friendly_ai_error)."""
     providers = []
+    if _vyce_api_key():
+        providers.append(("vyce", VYCE_BASE_URL, VYCE_MODEL, _vyce_api_key(),
+                          max_tokens, None, VYCE_TIMEOUT))
     if _atria_api_key():
         effort = {"reasoning_effort": ATRIA_REASONING_EFFORT} if ATRIA_REASONING_EFFORT else None
         providers.append(("atria", ATRIA_BASE_URL, ATRIA_MODEL, _atria_api_key(),
                           max(max_tokens, ATRIA_MIN_TOKENS), effort, ATRIA_TIMEOUT))
-    if _nara_api_key():
-        providers.append(("nara", NARA_BASE_URL, NARA_MODEL, _nara_api_key(),
-                          max_tokens, None, 120))
     if not providers and not _google_api_key():
         LAST_AI_CALL.update(provider=None, model=None, reason="no_key")
         return
@@ -517,8 +517,8 @@ async def stream_answer(prompt: str, max_tokens: int = 8192, interval: float = 0
     yield (strip_markdown(raw) if raw.strip() else ""), True
 
 
-def _describe_http_error(e: Exception, provider: str = "nara",
-                         model: str = NARA_MODEL) -> str:
+def _describe_http_error(e: Exception, provider: str = "vyce",
+                         model: str = VYCE_MODEL) -> str:
     """Короткое объяснение HTTP-ошибки: статус + тело ответа, если есть."""
     status = getattr(e, "code", None) or getattr(e, "status", None)
     body = ""
@@ -642,32 +642,29 @@ def _google_generate(prompt: str, max_tokens: int, image_bytes: Optional[bytes] 
 def _generate_text(prompt: str, max_tokens: int = 8192, image_bytes: Optional[bytes] = None,
                    think_off: bool = False, rating_key: bool = False,
                    caller: Optional[str] = None) -> Optional[str]:
-    """Atria Dawn — первичный провайдер для текста, GigaChat — для фото,
-    затем NaraRouter, Google — последний fallback.
+    """Текст: Vyce → Atria → Google. Фото: GigaChat → Google.
 
     Каждый вызов пишет одну итоговую строку [AI-ROUTE] в лог: кто вызвал,
     какой провайдер/модель реально ответили и почему случился fallback."""
     caller = caller or _auto_caller()
+    if not image_bytes and _vyce_api_key(ratings=rating_key):
+        text = _vyce_chat(prompt, max_tokens, api_key=_vyce_api_key(ratings=rating_key))
+        if text:
+            _log_ai_call(caller)
+            return text
+        print(f"[AI] Vyce не ответил ({LAST_AI_CALL.get('reason')}) — пробую Atria.")
     if not image_bytes and _atria_api_key(ratings=rating_key):
         text = _atria_chat(prompt, max_tokens, api_key=_atria_api_key(ratings=rating_key))
         if text:
             _log_ai_call(caller)
             return text
-        print(f"[AI] Atria не ответила ({LAST_AI_CALL.get('reason')}) — пробую NaraRouter.")
+        print(f"[AI] Atria не ответила ({LAST_AI_CALL.get('reason')}) — пробую Google fallback.")
     if image_bytes and _gigachat_api_key():
         text = _gigachat_chat(prompt, max_tokens, image_bytes)
         if text:
             _log_ai_call(caller)
             return text
-        print(f"[AI] GigaChat не ответил ({LAST_AI_CALL.get('reason')}) — пробую NaraRouter.")
-    text = _nara_chat(prompt, max_tokens, image_bytes,
-                      api_key=_nara_api_key(ratings=rating_key))
-    if text:
-        _log_ai_call(caller)
-        return text
-    nara_reason = LAST_AI_CALL.get("reason")
-    if _nara_api_key(ratings=rating_key):
-        print(f"[AI] NaraRouter не ответил ({nara_reason}) — пробую Google fallback.")
+        print(f"[AI] GigaChat не ответил ({LAST_AI_CALL.get('reason')}) — пробую Google fallback.")
     text = _google_generate(prompt, max_tokens, image_bytes, think_off,
                             api_key=_google_api_key(ratings=rating_key))
     _log_ai_call(caller)
@@ -686,22 +683,22 @@ def _friendly_ai_error() -> str:
     if "429" in reason or "rate limit" in reason or "resource_exhausted" in reason:
         return "❌ Слишком много запросов к ИИ. Подожди минуту и попробуй снова."
     if "401" in reason:
-        return "❌ ИИ недоступен (неверный API-ключ). Проверь ATRIA_API_KEY / NARA_API."
+        return "❌ ИИ недоступен (неверный API-ключ). Проверь VYCE_API_KEY / ATRIA_API_KEY."
     if "402" in reason:
-        return "❌ Закончились кредиты на ИИ-роутере. Пополни баланс Nara."
+        return "❌ Закончились кредиты на ИИ-роутере. Пополни баланс Vyce."
     if "400" in reason:
         return (f"❌ ИИ-роутер отклонил запрос (модель {model}). "
                 "Попробуй ещё раз или позже.")
     if "no_key" in reason or "google_no_key" in reason:
-        return "❌ ИИ недоступен (нет API-ключа). Установи ATRIA_API_KEY или NARA_API."
+        return "❌ ИИ недоступен (нет API-ключа). Установи VYCE_API_KEY или ATRIA_API_KEY."
     return "❌ ИИ не вернул ответ (возможно, сработала фильтрация). Попробуй ещё раз."
 
 
 def gemini_generate(prompt: str, max_tokens: int = 8192, raw: bool = False) -> str:
-    """Синхронный вызов ИИ (Atria → NaraRouter → Google).
+    """Синхронный вызов ИИ (Vyce → Atria → Google).
     raw=True — не применять strip_markdown (для JSON-ответов)."""
     if not _has_any_key():
-        return "❌ ИИ недоступен (нет API-ключа). Установи ATRIA_API_KEY или NARA_API."
+        return "❌ ИИ недоступен (нет API-ключа). Установи VYCE_API_KEY или ATRIA_API_KEY."
     text = _generate_text(prompt, max_tokens)
     if not text:
         return _friendly_ai_error()
@@ -725,7 +722,7 @@ def gemini_generate_json(prompt: str, max_tokens: int = 8192) -> str:
 
 
 def gemini_generate_rating(prompt: str, max_tokens: int = 1024) -> Optional[dict]:
-    """Авто-оценка категорий через отдельный ключ (NARA_API_RATINGS/NARA_API,
+    """Авто-оценка категорий через отдельный ключ (VYCE_API_KEY_RATINGS/VYCE_API_KEY,
     fallback — GOOGLE_API_KEY_RATINGS). Модель должна ответить JSON
     {"rating": 1-10, "comment"/"response": "..."}. Возвращает None если
     ключ не настроен или запрос не удался — вызывающий код должен в этом случае
@@ -897,7 +894,7 @@ def analyze_food_photo(image_bytes: bytes, prompt: str) -> Optional[str]:
 
 
 def analyze_body_photo(image_bytes: bytes, prompt: str, max_tokens: int = 2048) -> Optional[str]:
-    """Анализ фото телосложения (GigaChat → NaraRouter → Google; Atria не видит фото)."""
+    """Анализ фото телосложения (GigaChat → Google; Vyce/Atria не видят фото)."""
     if not image_bytes:
         return None
     if not _has_any_key(image=True):
