@@ -9,6 +9,31 @@
     <title>TrackCheck</title>
     <!-- paint the right background before JS boots, so there's no flash -->
     <style>html, body { margin: 0; } html { background: #030304; } html[data-theme="light"] { background: #f4f4f5; }</style>
+    <!-- boot loader: the logo, with light tracing its outline, until the app has data (App.tsx hides it) -->
+    <style>
+      #boot { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
+        background: #030304; color: #f1f1f3; transition: opacity 420ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+      html[data-theme="light"] #boot { background: #f4f4f5; color: #0c0c0f; }
+      #boot svg { width: 84px; height: 84px; overflow: visible; opacity: 0;
+        animation: boot-in 560ms cubic-bezier(0.34, 1.56, 0.64, 1) 120ms forwards, boot-breathe 2.4s ease-in-out 680ms infinite;
+        filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.55)); }
+      html[data-theme="light"] #boot svg { filter: none; }
+      #boot path { fill: none; stroke: currentColor; stroke-width: 10.5; stroke-linejoin: round; stroke-linecap: round; }
+      #boot .base { opacity: 0.16; }
+      #boot .tail, #boot .head { animation: boot-trace 1.6s linear infinite; }
+      #boot .tail { stroke-dasharray: 34 66; opacity: 0.45; }
+      #boot .head { stroke-dasharray: 14 86; animation-delay: -0.32s; }
+      #boot.out { opacity: 0; pointer-events: none; }
+      #boot.out svg { transform: scale(1.12); transition: transform 420ms cubic-bezier(0.2, 0.8, 0.2, 1); animation: none; opacity: 1; }
+      @keyframes boot-in { from { opacity: 0; transform: scale(0.7); } to { opacity: 1; transform: scale(1); } }
+      @keyframes boot-breathe { 50% { transform: scale(0.95); } }
+      @keyframes boot-trace { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+      @media (prefers-reduced-motion: reduce) {
+        #boot svg { animation: none; opacity: 1; }
+        #boot .tail, #boot .head { display: none; }
+        #boot .base { opacity: 1; }
+      }
+    </style>
     <script>
       (function () {
         var w = window.Telegram && window.Telegram.WebApp
@@ -17,11 +42,20 @@
         if (light) document.documentElement.setAttribute('data-theme', 'light')
       })()
     </script>
-    <script type="module" crossorigin src="/app/assets/index-G0tYZOIF.js"></script>
-    <link rel="stylesheet" crossorigin href="/app/assets/index-kzGvEL3B.css">
+    <script type="module" crossorigin src="/app/assets/index-B0EkkPfW.js"></script>
+    <link rel="stylesheet" crossorigin href="/app/assets/index-kRDJuoi2.css">
   </head>
   <body>
     <div class="cosmos" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div id="boot" aria-busy="true" aria-label="Загрузка">
+      <svg viewBox="0 0 100 100" aria-hidden="true">
+        <path class="base" d="M42 14H84Q86 14 86 16V58A28 28 0 0 1 58 86H16Q14 86 14 84V42A28 28 0 0 1 42 14Z" />
+        <path class="tail" pathLength="100" d="M42 14H84Q86 14 86 16V58A28 28 0 0 1 58 86H16Q14 86 14 84V42A28 28 0 0 1 42 14Z" />
+        <path class="head" pathLength="100" d="M42 14H84Q86 14 86 16V58A28 28 0 0 1 58 86H16Q14 86 14 84V42A28 28 0 0 1 42 14Z" />
+      </svg>
+    </div>
+    <!-- lift Telegram's own placeholder now, so the loader above covers the bundle download too -->
+    <script>try { window.Telegram.WebApp.ready() } catch (e) {}</script>
     <div id="root"></div>
   </body>
 </html>

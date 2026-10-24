@@ -53,6 +53,7 @@
   --t-fast: 120ms;
   --t-med: 240ms;
   --t-slow: 600ms;
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
   /* Telegram fullscreen safe areas (set by telegram-web-app.js), with env() fallback */
   --safe-top: max(env(safe-area-inset-top, 0px), calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)));
@@ -275,7 +276,6 @@ button:disabled { cursor: default; }
 }
 .nav-item span { font-size: 10px; font-weight: 550; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px; }
 .nav-item.is-active { color: var(--accent); background: var(--accent-soft); }
-.nav-item:active { transform: scale(0.94); }
 
 /* ---------- surfaces ---------- */
 
@@ -287,7 +287,7 @@ button:disabled { cursor: default; }
 }
 .panel + .panel { margin-top: 10px; }
 
-.section { margin-top: 22px; }
+.section { margin-top: 22px; animation: tc-fade var(--t-med) var(--ease); }
 .section-head {
   display: flex;
   align-items: baseline;
@@ -333,7 +333,6 @@ button:disabled { cursor: default; }
   transition: transform var(--t-fast) var(--ease), opacity var(--t-fast), background var(--t-fast);
   white-space: nowrap;
 }
-.btn:active:not(:disabled) { transform: scale(0.97); }
 .btn:disabled { opacity: 0.45; }
 .btn-primary { background: var(--accent); border-color: transparent; color: var(--accent-ink); font-weight: 650; }
 .btn-warm { background: var(--warm); border-color: transparent; color: var(--warm-ink); font-weight: 650; }
@@ -507,7 +506,6 @@ textarea.field { min-height: 128px; resize: vertical; line-height: 1.45; font-si
   text-align: left;
 }
 .cta-icon { color: var(--accent); flex: none; }
-.cta:active { transform: scale(0.99); }
 
 /* ---------- workout ---------- */
 
@@ -666,8 +664,18 @@ textarea.field { min-height: 128px; resize: vertical; line-height: 1.45; font-si
   70% { box-shadow: 0 0 0 10px transparent; }
   100% { box-shadow: 0 0 0 0 transparent; }
 }
-.is-ok { animation: tc-ok 750ms var(--ease); }
-.is-new { animation: tc-in var(--t-med) var(--ease), tc-ok 750ms var(--ease); }
+@keyframes tc-pop { 35% { scale: 1.02; } }
+.is-ok { animation: tc-ok 750ms var(--ease), tc-pop 420ms var(--spring); }
+.is-new { animation: tc-in var(--t-med) var(--ease), tc-ok 750ms var(--ease), tc-pop 420ms var(--spring); }
+
+/* press bounce (see installPressBounce in ui.tsx): sink while held, spring back on release.
+   Uses the `scale` property so it stacks with any `transform` the element already has. */
+@keyframes tc-press { to { scale: 0.94; } }
+@keyframes tc-boing { from { scale: 0.94; } 45% { scale: 1.04; } 75% { scale: 0.99; } to { scale: 1; } }
+@keyframes tc-unpress { from { scale: 0.94; } }
+.is-pressed { animation: tc-press 90ms ease-out forwards; }
+.is-boing { animation: tc-boing 380ms ease-out; }
+.is-unpress { animation: tc-unpress var(--t-fast) var(--ease); }
 
 /* busy indicator inside buttons */
 .spin {
@@ -770,7 +778,6 @@ textarea.field { min-height: 128px; resize: vertical; line-height: 1.45; font-si
   color: var(--text);
   transition: transform var(--t-fast), background var(--t-fast);
 }
-.ci-val:active { transform: scale(0.92); }
 .ci-val.is-on { background: var(--accent); color: var(--accent-ink); }
 .ci-scale { display: flex; justify-content: space-between; color: var(--text-3); font-size: 12.5px; margin-top: 8px; }
 .ci-done { text-align: center; padding: 8px 0 4px; }
@@ -902,7 +909,6 @@ textarea.field { min-height: 128px; resize: vertical; line-height: 1.45; font-si
   --edge-glow: var(--gold-glow);
 }
 .widget.is-silver { --edge: var(--silver); --edge-glow: var(--silver-glow); }
-.widget:active { transform: scale(0.97); }
 /* Coloured edge + halo, faded in by --glow (0..1). */
 .widget::after {
   content: "";
@@ -985,5 +991,4 @@ textarea.field { min-height: 128px; resize: vertical; line-height: 1.45; font-si
   transition: opacity var(--t-fast), transform var(--t-fast);
 }
 .ask-send:disabled { background: var(--surface-2); color: var(--text-3); }
-.ask-send:active:not(:disabled) { transform: scale(0.92); }
 .ask-link { display: block; margin: 6px 0 0 auto; border: 0; background: none; color: var(--text-3); font-size: 13px; padding: 4px 6px; }

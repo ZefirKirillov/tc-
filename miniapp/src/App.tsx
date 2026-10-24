@@ -60,6 +60,15 @@ export default function App() {
   }, [])
   useEffect(loadMe, [loadMe])
 
+  // The logo loader from index.html stays up until there's something real to show.
+  const booted = !!me || !!loadErr
+  useEffect(() => {
+    const el = document.getElementById('boot')
+    if (!booted || !el) return
+    el.classList.add('out')
+    window.setTimeout(() => el.remove(), 450)
+  }, [booted])
+
   const switchTab = useCallback((k: Tab) => {
     setDeepCheckin(false)
     setTab((cur) => {

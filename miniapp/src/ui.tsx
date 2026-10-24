@@ -105,6 +105,34 @@ export function pulseOk(target?: Element | string | null) {
   }))
 }
 
+// ---------- press bounce ----------
+
+const PRESSABLE = '.btn, .nav-item, .cta, .ci-val, .widget, .ask-send'
+
+/** Buttons sink while held and spring back on release (classes in theme.css). Done with
+ *  pointer events rather than :active — iOS webviews often skip :active, and a quick tap
+ *  would release before a CSS transition gets anywhere. A scroll cancels without the bounce. */
+export function installPressBounce() {
+  let cur: HTMLElement | null = null
+  const settle = (cls: 'is-boing' | 'is-unpress') => {
+    const el = cur
+    if (!el) return
+    cur = null
+    el.classList.remove('is-pressed')
+    el.classList.add(cls)
+    el.addEventListener('animationend', () => el.classList.remove(cls), { once: true })
+  }
+  document.addEventListener('pointerdown', (e) => {
+    const el = (e.target as Element).closest?.(PRESSABLE) as HTMLElement | null
+    if (!el || (el as HTMLButtonElement).disabled) return
+    el.classList.remove('is-boing', 'is-unpress')
+    el.classList.add('is-pressed')
+    cur = el
+  }, { passive: true })
+  document.addEventListener('pointerup', () => settle('is-boing'), { passive: true })
+  document.addEventListener('pointercancel', () => settle('is-unpress'), { passive: true })
+}
+
 // ---------- loading / empty / error ----------
 
 /** Busy indicator that only appears if the wait lasts longer than `delay` ms —
